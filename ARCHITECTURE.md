@@ -1,0 +1,105 @@
+# Architecture — Healthcare AI Patient Symptom Triage Concierge
+
+This document is the top-level entry point for the system architecture. It describes design philosophy, use case scope, and links to detailed architecture documents.
+
+---
+
+## What we built
+
+A multi-agent, multi-turn **Patient Symptom Triage Concierge** for telehealth. A patient sends a message; the system classifies it, applies safety and privacy guardrails, conducts the appropriate multi-step workflow, and returns a compliant, empathetic response — all within a persistent conversation session.
+
+**Three use cases:**
+- **UC1 — Symptom Check:** acuity classification (Low/Medium/High), safe reply generation, emergency escalation, appointment offer
+- **UC2 — Prescription Refill:** medication extraction, confirmation, prescription history check, order creation or appointment offer
+- **UC3 — Appointment Booking:** preference collection, doctor availability, slot selection, booking
+
+---
+
+## Core design principles
+
+| Principle | How it's applied |
+|---|---|
+| LLMs only where irreplaceable | Regex + local NLI model handle guardrails; Haiku only for generation, extraction, summarization |
+| PHI de-identification, not blocking | Sensitive fields are hashed before reaching the LLM; only first name is restored in the response |
+| Provider-agnostic LLM layer | All LLM calls go through a Pydantic abstraction; switching models = one config change |
+| Stateful multi-turn sessions | LangGraph `StateGraph` with `MemorySaver` (demo) / `RedisSaver` (production) |
+| Fail safe | Any unhandled error defaults to a blocked response; never silently passes |
+| Cost transparency | Every API call metered; cost reported per request |
+
+---
+
+## Architecture documents
+
+### [HIGH_LEVEL_ARCHITECTURE.md](HIGH_LEVEL_ARCHITECTURE.md)
+The production system design — services, infrastructure, and data stores:
+- Patient-facing API gateway and load balancing
+- Horizontally scaled FastAPI + LangGraph worker pool
+- PostgreSQL for audit logs, patient records, PHI lookup tables, prescription and appointment data
+- Redis for session state, LangGraph checkpointing, rate limiting, and inference caching
+- Dedicated local model servers (DeBERTa NLI, spaCy)
+- HITL (Human-In-The-Loop) reviewer dashboard for emergency escalations
+- Monitoring and alerting
+
+### [LOW_LEVEL_ARCHITECTURE.md](LOW_LEVEL_ARCHITECTURE.md)
+The current implementation and data flow:
+- LangGraph graph structure (11 nodes, 3 UC subgraphs, resume router pattern)
+- Full turn-by-turn data flow for each use case
+- TriageState schema and how it evolves across turns
+- PHI de-identification pipeline
+- LLM abstraction layer internals
+- Evolution path from demo to production
+
+---
+
+## Technology decisions at a glance
+
+| Component | Technology | Reason |
+|---|---|---|
+| Graph orchestration | LangGraph | Stateful multi-turn, conditional routing, HITL interrupt, subgraph composition |
+| LLM | Claude Haiku 4.5 via OpenRouter | Cheapest capable model; OpenRouter enables provider-neutral code |
+| LLM SDK | openai (AsyncOpenAI) | OpenRouter is OpenAI-compatible; same code works for any provider |
+| Local classifier | `cross-encoder/nli-deberta-v3-xsmall` | Zero-cost NLI for health relevance, emergency signals, intent classification |
+| NER | spaCy `en_core_web_md` | PERSON/DATE/GPE entity extraction for PHI detection |
+| Session state (demo) | LangGraph MemorySaver | In-process, zero dependencies for demo |
+| Session state (prod) | LangGraph RedisSaver | Persistent, horizontally scalable |
+| Backend | FastAPI | Async, auto OpenAPI docs, Pydantic validation |
+| Frontend | Chainlit | Python-native ChatGPT-style chat UI |
+
+---
+
+## Cost model
+
+| Scenario | LLM calls | Estimated cost |
+|---|---|---|
+| Symptom check, happy path | 1 Haiku | ~$0.0015 |
+| Prescription refill (extract + check) | 1 Haiku | ~$0.0015 |
+| Refill → appointment (with summarization) | 2 Haiku | ~$0.0030 |
+| Emergency short-circuit | 0 | $0.00 |
+| Non-health block | 0 | $0.00 |
+| **Average (estimated)** | ~1.2–1.5 | **~$0.0020** |
+
+Using Claude Opus 4.8 for everything would cost ~$0.025/request — approximately 12× more expensive.
+
+---
+
+## Safety and compliance
+
+Every response passes through two deterministic checks before reaching the patient:
+
+1. **Disclaimer enforcement:** UC1 responses must contain the mandatory disclaimer. If missing, it is appended.
+2. **Violation detection:** Regex patterns flag diagnosis language ("you have X") and prescription advice ("take 500mg"). Any match replaces the response with a safe fallback.
+
+The LLM system prompt is written to prevent violations; the safety layer is a belt-and-suspenders guarantee.
+
+---
+
+## What's mocked (demo scope)
+
+The following are simulated with mock data and would be replaced with real integrations in production:
+
+- `tools/patient.py` — patient identity and appointment history lookup
+- `tools/prescription.py` — prescription database and order creation
+- `tools/appointment.py` — doctor availability and booking API
+- `tools/emergency.py` — emergency dispatch and HITL notification
+
+Session state, PHI lookup tables, and all logs are in-memory. See [HIGH_LEVEL_ARCHITECTURE.md](HIGH_LEVEL_ARCHITECTURE.md) for the production data persistence design.

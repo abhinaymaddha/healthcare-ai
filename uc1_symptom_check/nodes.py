@@ -1,0 +1,83 @@
+"""UC1 Symptom Check nodes."""
+from __future__ import annotations
+import logging
+from models.state import TriageState
+from models.llm import get_llm_client
+from tools.patient import get_appointment_history
+from prompts.uc1 import build_symptom_response_request
+
+logger = logging.getLogger(__name__)
+
+HIGH_ACUITY_TERMS = [
+    "severe", "sudden", "worst", "can't walk", "unable to walk",
+    "high fever", "103", "104", "105", "can't eat", "can't drink",
+    "vision loss", "worst headache of my life", "jaw pain", "left arm",
+]
+MEDIUM_ACUITY_TERMS = [
+    "persistent", "ongoing", "for weeks", "getting worse", "worsening",
+    "not improving", "3 days", "4 days", "5 days", "a week", "two weeks",
+    "spreading",
+]
+MENTAL_HEALTH_CRISIS_TERMS = [
+    "suicidal", "self-harm", "want to die", "end my life", "hopeless",
+    "severe depression", "panic attack", "can't function",
+]
+
+
+def _classify_acuity(message: str, needs_escalation: bool) -> str:
+    if needs_escalation:
+        return "High"
+    text_lower = message.lower()
+    if any(t in text_lower for t in MENTAL_HEALTH_CRISIS_TERMS):
+        return "High"
+    if any(t in text_lower for t in HIGH_ACUITY_TERMS):
+        return "High"
+    if any(t in text_lower for t in MEDIUM_ACUITY_TERMS):
+        return "Medium"
+    return "Low"
+
+
+async def symptom_check_node(state: TriageState) -> dict:
+    message = state.get("de_identified_message", "")
+    needs_escalation = state.get("needs_escalation", False)
+    acuity = _classify_acuity(message, needs_escalation)
+    first_name = state.get("patient_first_name") or None
+
+    client = get_llm_client()
+    response = await client.complete(
+        build_symptom_response_request(message, acuity, first_name)
+    )
+
+    # Check if we should offer appointment booking at end
+    patient_id = state.get("patient_id")
+    appointment_offer = ""
+    if acuity in ("Low", "Medium") and patient_id:
+        history = await get_appointment_history(patient_id)
+        if history.get("has_prior_appointments"):
+            doc = history["preferred_doctor"]["doctor_name"]
+            appointment_offer = (
+                f"\n\nWould you like me to book a follow-up consultation "
+                f"with {doc}, or schedule a new appointment?"
+            )
+        else:
+            appointment_offer = (
+                "\n\nWould you like me to help you book a doctor's appointment?"
+            )
+
+    full_response = response.content + appointment_offer
+
+    return {
+        "chief_complaint": message[:200],
+        "acuity": acuity,
+        "patient_response": full_response,
+        "uc1_complete": True,
+        "total_cost_usd": state.get("total_cost_usd", 0.0) + response.estimated_cost_usd,
+        "llm_calls": state.get("llm_calls", 0) + 1,
+    }
+
+
+def route_after_uc1(state: TriageState) -> str:
+    pending = state.get("pending_intent")
+    if pending == "UC3":
+        return "summarize"
+    return "compliance"

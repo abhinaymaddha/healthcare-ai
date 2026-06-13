@@ -1,0 +1,39 @@
+# Environment and secrets
+.env
+*.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.Python
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# HuggingFace model cache
+.cache/
+
+# Logs
+*.log
+server.log
+server_err.log
+
+# Test output
+eval/report.txt
+eval/report.json
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
