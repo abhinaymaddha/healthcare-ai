@@ -19,7 +19,7 @@ A multi-agent, multi-turn **Patient Symptom Triage Concierge** for telehealth. A
 
 | Principle | How it's applied |
 |---|---|
-| LLMs only where irreplaceable | Regex + local NLI model handle guardrails; Haiku only for generation, extraction, summarization |
+| LLMs only where irreplaceable | Regex + local NLI model handle guardrails; small LLM for extraction, classification and summarization; medium-size LLM for clinical response generation |
 | PHI de-identification, not blocking | Sensitive fields are hashed before reaching the LLM; only first name is restored in the response |
 | Provider-agnostic LLM layer | All LLM calls go through a Pydantic abstraction; switching models = one config change |
 | Stateful multi-turn sessions | LangGraph `StateGraph` with `MemorySaver` (demo) / `RedisSaver` (production) |
@@ -62,7 +62,8 @@ Infrastructure, data, and implementation reference — written for engineers and
 | Component | Technology | Reason |
 |---|---|---|
 | Graph orchestration | LangGraph | Stateful multi-turn, conditional routing, HITL interrupt, subgraph composition |
-| LLM | Claude Haiku 4.5 via OpenRouter | Cheapest capable model; OpenRouter enables provider-neutral code |
+| LLM (small) | Small LLM via OpenRouter | Intent confirmation, clarification, extraction, summarization — fast and low-cost |
+| LLM (medium) | Medium-size LLM via OpenRouter | Clinical response generation (UC1) — higher quality where patient safety depends on nuance |
 | LLM SDK | openai (AsyncOpenAI) | OpenRouter is OpenAI-compatible; same code works for any provider |
 | Local classifier | `cross-encoder/nli-deberta-v3-xsmall` | Zero-cost NLI for health relevance, emergency signals, intent classification |
 | NER | spaCy `en_core_web_md` | PERSON/DATE/GPE entity extraction for PHI detection |
@@ -77,14 +78,17 @@ Infrastructure, data, and implementation reference — written for engineers and
 
 | Scenario | LLM calls | Estimated cost |
 |---|---|---|
-| Symptom check, happy path | 1 Haiku | ~$0.0015 |
-| Prescription refill (extract + check) | 1 Haiku | ~$0.0015 |
-| Refill → appointment (with summarization) | 2 Haiku | ~$0.0030 |
+| Symptom check, happy path | 1 medium-size LLM | ~$0.007 |
+| Prescription refill (extract + check) | 1 small LLM | ~$0.0015 |
+| Refill → appointment (with summarization) | 1 small + 1 medium-size LLM | ~$0.009 |
+| Mixed-intent clarification + symptom check | 1–3 small + 1 medium-size LLM | ~$0.009–0.012 |
 | Emergency short-circuit | 0 | $0.00 |
 | Non-health block | 0 | $0.00 |
-| **Average (estimated)** | ~1.2–1.5 | **~$0.0020** |
+| **Average (estimated)** | ~1.2–1.5 | **~$0.005–0.008** |
 
-Using Claude Opus 4.8 for everything would cost ~$0.025/request — approximately 12× more expensive.
+**Testing implementation:** small LLM = Claude Haiku 4.5, medium-size LLM = Claude Sonnet 4.6. A large LLM (e.g., Claude Opus 4.8) is not currently used but is provisioned in the model tier for future high-complexity tasks.
+
+Using a large LLM for everything would cost ~$0.025–0.050/request — approximately 5–10× more expensive than the two-tier approach.
 
 ---
 

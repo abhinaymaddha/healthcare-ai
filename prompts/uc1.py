@@ -11,7 +11,7 @@ Prompt engineering decisions:
 from __future__ import annotations
 from models.llm import LLMConfig, LLMRequest, LLMMessage
 
-_MODEL = "anthropic/claude-haiku-4-5"
+_MODEL = "anthropic/claude-sonnet-4-6"   # medium-size LLM — clinical response quality matters here
 _PROVIDER = "openrouter"
 
 # ── System prompt ──────────────────────────────────────────────────────────────

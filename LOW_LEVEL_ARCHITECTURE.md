@@ -55,8 +55,8 @@ This document covers the technical details: how data is stored and processed, ho
                          │ (health rel, │  │ Open-│  │ Prescription │
                          │  emergency,  │  │Router│  │   System     │
                          │  intent)     │  │  ↓   │  │ Appointment  │
-                         │              │  │Haiku │  │   Booking    │
-                         │ spaCy NER    │  │ 4.5  │  │ Emergency    │
+                         │              │  │Small/│  │   Booking    │
+                         │ spaCy NER    │  │Med   │  │ Emergency    │
                          │ (PHI detect) │  │      │  │   Dispatch   │
                          └──────────────┘  └──────┘  └──────┬───────┘
                                                              │
@@ -98,7 +98,7 @@ This document covers the technical details: how data is stored and processed, ho
 - Executes the compiled graph for one turn
 - Reads/writes checkpoint via RedisSaver
 - Calls local ML servers for NLI/NER inference
-- Calls LLM gateway for Haiku completions
+- Calls LLM gateway for small LLM (extraction, routing) and medium-size LLM (clinical response) completions
 - Calls tool layer (real databases and APIs in production, mocks in demo)
 - Can be scaled independently of the HTTP layer
 
@@ -109,9 +109,12 @@ This document covers the technical details: how data is stored and processed, ho
 - Separate from worker pool to allow independent scaling and model updates
 
 #### LLM Gateway (OpenRouter)
-- Routes to `anthropic/claude-haiku-4-5`
+- Routes to the small LLM (e.g., `anthropic/claude-haiku-4-5`) for intent confirmation, clarification, extraction, and summarization
+- Routes to the medium-size LLM (e.g., `anthropic/claude-sonnet-4-6`) for clinical response generation (UC1)
 - Adds retry logic, fallback routing, and spend tracking
 - Enables zero-code model swaps (change config, not code)
+
+**Testing implementation:** small LLM = Claude Haiku 4.5, medium-size LLM = Claude Sonnet 4.6
 
 #### HITL Reviewer Dashboard
 - Web UI for clinical reviewers to see emergency-escalated sessions
@@ -129,7 +132,7 @@ This document covers the technical details: how data is stored and processed, ho
 | 100–1,000 req/min | 4 FastAPI pods, 4 LangGraph workers, Redis Cluster (3 shards) |
 | > 1,000 req/min | Auto-scale FastAPI + workers; ML servers on GPU; Postgres read replicas |
 
-LangGraph workers are the bottleneck at high load — each invocation blocks for 500ms–3,000ms waiting on the Haiku API call. Horizontal scaling (more workers) is the primary lever.
+LangGraph workers are the bottleneck at high load — each invocation blocks for 500ms–3,000ms waiting on the LLM API call (longer for the medium-size LLM on UC1 turns). Horizontal scaling (more workers) is the primary lever.
 
 ---
 
@@ -510,7 +513,7 @@ Classifies or continues the active use case using multi-score gap analysis.
 | Condition | Action |
 |---|---|
 | Top logit ≥ 1.2 AND gap ≥ 1.0 | Direct route — very high confidence single intent |
-| Gap ≥ 0.15 | Haiku confirms intent (1 LLM call). If NLI top was UC1 but Haiku says UC2/UC3, patient stated symptoms alongside a task request → route to `clarification` |
+| Gap ≥ 0.15 | Small LLM confirms intent (1 LLM call). If NLI top was UC1 but small LLM says UC2/UC3, patient stated symptoms alongside a task request → route to `clarification` |
 | Gap < 0.15 | Genuinely tied intents → route to `clarification` |
 
 The gap-based approach is necessary because DeBERTa NLI entailment logits for this task are raw (not softmax probabilities) and can be negative. Absolute score thresholds are unreliable; the gap between top-2 labels is the meaningful signal.
@@ -520,7 +523,7 @@ Iterative intake form — asks one focused question per turn until intent is con
 
 **On each turn:**
 1. Builds conversation context from the last 8 messages
-2. Calls Haiku with a structured prompt: extract any new information from the patient's answer, determine if clarification is complete, generate the next question
+2. Calls small LLM with a structured prompt: extract any new information from the patient's answer, determine if clarification is complete, generate the next question
 3. Updates `clarification_form` with extracted fields (primary_concern, severity, duration, onset, emergency_signs)
 4. If `clarification_complete = True` and intent is confirmed:
    - For UC1: sets `de_identified_message` to a synthesized symptom description from the form, so UC1 has full context
@@ -609,13 +612,13 @@ no preferences yet                             → collect_preferences_node → 
 
 5. intent_router_node
    ├── No current_intent set
-   ├── all_scores(): UC1 logit high with large gap → Haiku confirms UC1
-   ├── Haiku agrees → no clarification triggered
+   ├── all_scores(): UC1 logit high with large gap → small LLM confirms UC1
+   ├── Small LLM agrees → no clarification triggered
    └── State: current_intent = "UC1"
 
 6. uc1 subgraph → symptom_check_node
    ├── Acuity: duration terms → "Medium"
-   ├── Haiku call: reply generation (1 LLM call, ~$0.0015)
+   ├── Medium-size LLM call: reply generation (1 LLM call, ~$0.007)
    └── State: acuity="Medium", patient_response="...[response]..."
 
 7. route_after_uc1 → "compliance"
@@ -642,14 +645,14 @@ Turn 1 (mixed signal)
 guardrail → pass (no PHI, no emergency keyword match)
 intent_router:
   all_scores(): UC1 logit = 0.31, UC2 logit = 0.21 → gap = 0.10 < 0.15?  No, let's say 0.24
-  Actually: NLI top = UC1 (symptoms detected), gap = 0.24 ≥ 0.15 → Haiku confirm
-  Haiku: "UC2" (patient explicitly mentioned running out of medication)
-  top_intent=UC1 and haiku_intent=UC2 → mixed-intent detected
+  Actually: NLI top = UC1 (symptoms detected), gap = 0.24 ≥ 0.15 → small LLM confirm
+  Small LLM: "UC2" (patient explicitly mentioned running out of medication)
+  top_intent=UC1 and small_llm_intent=UC2 → mixed-intent detected
   → clarification_pending=True, detected_intents=["UC1","UC2"]
 
 clarification_node (turn 1):
   form["original_message"] = patient's full message (saved on first entry)
-  Haiku call: extract what's known, generate first question
+  Small LLM call: extract what's known, generate first question
     extracted: { primary_concern: "high blood pressure + headache", emergency_signs: null }
     clarification_complete: False
     response: "I want to make sure we address the most urgent concern first. Are you
@@ -666,7 +669,7 @@ guardrail → pass
 intent_router: clarification_pending=True → no-op → route_intent → "clarification"
 
 clarification_node (turn 2):
-  Haiku call:
+  Small LLM call:
     extracted: { emergency_signs: false, duration: "2 days", primary_concern: "hypertension" }
     intent_confirmed: "UC2"
     clarification_complete: True
@@ -689,7 +692,7 @@ guardrail → pass → intent_router → UC2
 uc2 subgraph:
   uc2_resume_router: medications_extracted empty → "extract"
   extract_medications_node:
-    Haiku call: extract [{ name:"metformin", dosage:"500mg", quantity: null }]
+    Small LLM call: extract [{ name:"metformin", dosage:"500mg", quantity: null }]
     (name preserved verbatim — no brand normalisation)
     get_standard_quantity("metformin") → { quantity: 90, pack: "90 tablets" }
     State: medications_extracted=[...], uc2_awaiting_confirmation=True
@@ -799,7 +802,7 @@ models/llm.py
       base_url="https://openrouter.ai/api/v1",
       api_key=os.getenv("OPENROUTER_API_KEY")
   ).chat.completions.create(
-      model="anthropic/claude-haiku-4-5",
+      model="anthropic/claude-haiku-4-5",   # or claude-sonnet-4-6 for medium-size LLM tasks
       messages=[system + user],
       max_tokens=..., temperature=...
   )
@@ -808,7 +811,7 @@ models/llm.py
   LLMResponse(content, input_tokens, output_tokens, estimated_cost_usd)
 ```
 
-To switch providers, change `DEFAULT_PROVIDER` and `DEFAULT_MODEL` in `config/llm_configs.py`. No node code changes needed.
+To switch models, change `SMALL_MODEL` or `MEDIUM_MODEL` in `config/llm_configs.py`. No node code changes needed.
 
 ---
 

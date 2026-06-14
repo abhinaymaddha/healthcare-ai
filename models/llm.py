@@ -41,12 +41,18 @@ class LLMResponse(BaseModel):
     @property
     def estimated_cost_usd(self) -> float:
         COST_MAP = {
-            ("anthropic",   "claude-haiku-4-5"):                   (1.0,  5.0),
-            ("anthropic",   "claude-opus-4-8"):                    (5.0, 25.0),
-            ("openrouter",  "anthropic/claude-haiku-4-5"):         (1.0,  5.0),
-            ("openrouter",  "anthropic/claude-3-5-haiku"):         (1.0,  5.0),
-            ("openrouter",  "anthropic/claude-3-5-haiku-20241022"): (1.0, 5.0),
-            ("openai",      "gpt-4o-mini"):                        (0.15, 0.60),
+            # Small LLM — fast tasks (intent, extraction, clarification, summarization)
+            ("anthropic",   "claude-haiku-4-5"):                    (1.0,   5.0),
+            ("openrouter",  "anthropic/claude-haiku-4-5"):          (1.0,   5.0),
+            ("openrouter",  "anthropic/claude-3-5-haiku"):          (1.0,   5.0),
+            ("openrouter",  "anthropic/claude-3-5-haiku-20241022"): (1.0,   5.0),
+            # Medium-size LLM — clinical response generation (UC1)
+            ("anthropic",   "claude-sonnet-4-6"):                   (3.0,  15.0),
+            ("openrouter",  "anthropic/claude-sonnet-4-6"):         (3.0,  15.0),
+            # Large LLM — reserved for future high-complexity tasks
+            ("anthropic",   "claude-opus-4-8"):                     (5.0,  25.0),
+            ("openrouter",  "anthropic/claude-opus-4-8"):           (5.0,  25.0),
+            ("openai",      "gpt-4o-mini"):                         (0.15,  0.60),
         }
         inp_rate, out_rate = COST_MAP.get((self.provider, self.model), (0.0, 0.0))
         return (self.input_tokens * inp_rate + self.output_tokens * out_rate) / 1_000_000

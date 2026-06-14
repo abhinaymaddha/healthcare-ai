@@ -93,7 +93,7 @@ The AI prompts are separately engineered to prevent these violations. The compli
 | Access control | Role-based: clinical reviewers access escalation queue only; no patient PII visible in any operational UI |
 | API security | JWT/OAuth authentication at the gateway; WAF blocks SQL injection, XSS, and prompt injection headers |
 | Local AI processing | Health relevance, emergency detection, and intent routing run on clinic infrastructure — no patient data is sent to a cloud API for routing decisions |
-| LLM provider | The AI model (Claude Haiku 4.5 via OpenRouter) sees only de-identified tokens; switching to a different provider requires a single configuration change |
+| LLM provider | A two-tier LLM approach: a small LLM handles intent confirmation, clarification, extraction, and summarization; a medium-size LLM generates clinical responses (UC1) where quality and safety nuance matter most. Both see only de-identified tokens; switching provider requires a single configuration change. Testing used Claude Haiku 4.5 (small) and Claude Sonnet 4.6 (medium). |
 
 ---
 

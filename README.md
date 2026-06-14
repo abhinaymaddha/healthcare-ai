@@ -2,7 +2,7 @@
 
 A multi-agent, multi-turn AI system that handles the first turn of a patient conversation in a telehealth app. It classifies the inquiry, applies clinical-safety and privacy checks, and generates a compliant patient-facing reply — across three use cases: symptom checking, prescription refills, and appointment booking.
 
-Built with **LangGraph** for stateful multi-turn orchestration, **Claude Haiku 4.5** via OpenRouter for generation, and a local **DeBERTa NLI** model for guardrails.
+Built with **LangGraph** for stateful multi-turn orchestration, a two-tier LLM strategy (small LLM for routing/extraction, medium-size LLM for clinical response generation) via OpenRouter, and a local **DeBERTa NLI** model for guardrails. Testing used **Claude Haiku 4.5** (small LLM) and **Claude Sonnet 4.6** (medium-size LLM).
 
 ---
 
@@ -162,7 +162,7 @@ python eval/evaluate.py --cases eval/test_cases.json --output eval/report.txt
 │   ├── llm.py                  Provider-agnostic LLM abstraction
 │   └── classifier.py           DeBERTa NLI singleton
 ├── guardrail/                  PHI de-id, health relevance, emergency detection
-├── intent/                     Intent router (local NLI + Haiku fallback)
+├── intent/                     Intent router (local NLI + small LLM fallback)
 ├── uc1_symptom_check/          Symptom check, acuity classification, reply gen
 ├── uc2_prescription_refill/    Prescription refill multi-turn workflow
 ├── uc3_appointment_booking/    Appointment booking multi-turn workflow
@@ -184,7 +184,8 @@ All LLM calls are routed through `config/llm_configs.py`. To switch models:
 
 ```python
 # config/llm_configs.py
-_MODEL    = "anthropic/claude-haiku-4-5"   # change this
+SMALL_MODEL  = "anthropic/claude-haiku-4-5"    # intent, extraction, clarification
+MEDIUM_MODEL = "anthropic/claude-sonnet-4-6"  # clinical response generation (UC1)
 _PROVIDER = "openrouter"                    # or "openai", "anthropic", "gemini"
 ```
 
