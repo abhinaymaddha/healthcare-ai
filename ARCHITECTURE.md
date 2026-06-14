@@ -109,3 +109,15 @@ The following are simulated with mock data and would be replaced with real integ
 - `tools/emergency.py` — emergency dispatch and HITL notification
 
 Session state, PHI lookup tables, and all logs are in-memory. See [HIGH_LEVEL_ARCHITECTURE.md](HIGH_LEVEL_ARCHITECTURE.md) for the production data persistence design.
+
+---
+
+## Future scope
+
+See [FUTURE_SCOPE.md](FUTURE_SCOPE.md) for planned improvements across five areas:
+
+1. **Fine-grained clinical triage classification** — duration, symptom co-occurrence, progression, and risk factors as explicit acuity inputs
+2. **Improved diagnosis boundary enforcement** — LLM-as-judge output checking; broader NLI coverage of indirect diagnosis-seeking
+3. **Message traceability and session logging** — message IDs, sender types, and source references on all extracted clinical data
+4. **Adaptive response tone** — health literacy matching and non-English routing
+5. **Evaluation and continuous improvement** — CI-integrated eval, LLM-as-judge scoring, failure-to-test-case pipeline
