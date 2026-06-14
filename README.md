@@ -157,10 +157,10 @@ python smoke_test.py
 
 ```bash
 # Quick (30 cases, ~2 minutes)
-python eval/evaluate.py --cases eval/test_cases_mini.json
+python eval/evaluate.py --file eval/test_cases_mini.json
 
-# Full (200 cases, ~15 minutes)
-python eval/evaluate.py --cases eval/test_cases.json --output eval/report.txt
+# Full (190 cases, ~15 minutes)
+python eval/evaluate.py --file eval/test_cases.json --output eval/report.txt
 ```
 
 ---
@@ -175,6 +175,7 @@ python eval/evaluate.py --cases eval/test_cases.json --output eval/report.txt
 │   └── classifier.py           DeBERTa NLI singleton
 ├── guardrail/                  PHI de-id, health relevance, emergency detection
 ├── intent/                     Intent router (local NLI + small LLM fallback)
+├── emergency_companion/        Patient engagement subgraph after emergency dispatch
 ├── uc1_symptom_check/          Symptom check, acuity classification, reply gen
 ├── uc2_prescription_refill/    Prescription refill multi-turn workflow
 ├── uc3_appointment_booking/    Appointment booking multi-turn workflow
@@ -185,6 +186,8 @@ python eval/evaluate.py --cases eval/test_cases.json --output eval/report.txt
 ├── eval/                       Evaluation dataset + harness
 ├── main.py                     FastAPI backend
 ├── chainlit_app.py             Chainlit chat frontend
+├── chainlit.md                 Chainlit UI welcome message
+├── .chainlit/                  Chainlit configuration
 └── smoke_test.py               Quick 5-scenario smoke test
 ```
 
