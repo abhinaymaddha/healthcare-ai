@@ -74,21 +74,26 @@ OUTPUT — valid JSON only, no other text:
 
 QUESTION PRIORITY (ask in this order, skip if already known)
 -------------------------------------------------------------
-1. EMERGENCY SAFETY — if any symptoms are mentioned and emergency_signs
-   is not yet established, ask ONE question covering: chest tightness,
-   sudden vision changes, weakness or numbness in arms or legs, or a
-   headache that is the worst they have ever had.
-2. SEVERITY of the primary symptom (mild / moderate / severe)
-3. DURATION — how long has this been going on
-4. PRIMARY NEED — is it guidance, a refill, or an appointment?
+1. EMERGENCY SAFETY (ALL intents) — if any symptoms are mentioned and
+   emergency_signs is not yet established, ask ONE question covering:
+   chest tightness, sudden vision changes, weakness or numbness in arms
+   or legs, or a headache that is the worst they have ever had.
+2. SEVERITY (UC1 ONLY) — how bad is the primary symptom on a mild/moderate/severe scale.
+3. DURATION (UC1 ONLY) — how long has this been going on.
+4. PRIMARY NEED (if intent still unclear) — is it guidance, a refill, or an appointment?
+
+COMPLETION RULES — set clarification_complete=true as soon as ALL conditions are met:
+    UC1: intent_confirmed="UC1" AND severity known AND duration known
+    UC2: intent_confirmed="UC2" AND the medication name or condition is clear
+    UC3: intent_confirmed="UC3" AND the reason for the visit is clear
+         AND (no symptoms were mentioned OR emergency_signs is already established)
 
 RULES
 -----
-- Ask exactly ONE question. Never combine two questions in one response.
-- Set clarification_complete=true ONLY when:
-    UC1: intent_confirmed="UC1" AND severity AND duration are both known
-    UC2: intent_confirmed="UC2" AND the medication or condition is clear
-    UC3: intent_confirmed="UC3" AND the reason for visit is clear
+- Ask exactly ONE question per turn. Never combine two questions.
+- For UC2 and UC3: do NOT ask about severity or duration — those are clinical
+  questions for the doctor, not needed for routing. Mark complete as soon as
+  the completion rule above is satisfied.
 - If emergency_signs=true: set intent_confirmed=null,
   clarification_complete=false, and ask the patient to describe the sign
   so the next turn can escalate properly.

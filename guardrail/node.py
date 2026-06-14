@@ -37,22 +37,35 @@ async def guardrail_node(state: TriageState) -> dict:
                 first_name = value.strip().split()[0]
                 break
 
-    # Step 2: Health relevance check (logs inside is_health_related)
-    health_related = is_health_related(de_identified)
+    in_clarification = bool(state.get("clarification_pending"))
+    awaiting_911 = bool(state.get("awaiting_911_confirmation"))
 
-    # Step 3: Emergency detection
+    # Step 2: Health relevance check
+    # Skip when the patient is answering our own clarification questions or the 911
+    # dispatch prompt — those answers don't need to be independently health-related.
+    if in_clarification or awaiting_911:
+        health_related = True
+        logger.info("  Health: skipped (clarification_pending=%s, awaiting_911=%s) → PASS", in_clarification, awaiting_911)
+    else:
+        health_related = is_health_related(de_identified)
+
+    # Step 3: Emergency detection — always runs, even mid-clarification
     needs_escalation, escalation_signals = detect_escalation(de_identified)
     if needs_escalation:
         logger.info("  Emergency: ESCALATE — signals=%s", escalation_signals)
     else:
         logger.info("  Emergency: clear")
 
-    # Step 4: Diagnosis demand detection
-    is_diagnosis_demand, diagnosis_signal = detect_diagnosis_demand(de_identified)
-    if is_diagnosis_demand:
-        logger.info("  Diagnosis demand: BLOCKED — signal=%r", diagnosis_signal)
+    # Step 4: Diagnosis demand detection — skip mid-clarification (patient answering our Q)
+    if in_clarification:
+        is_diagnosis_demand, diagnosis_signal = False, None
+        logger.info("  Diagnosis demand: skipped (in clarification)")
     else:
-        logger.info("  Diagnosis demand: clear")
+        is_diagnosis_demand, diagnosis_signal = detect_diagnosis_demand(de_identified)
+        if is_diagnosis_demand:
+            logger.info("  Diagnosis demand: BLOCKED — signal=%r", diagnosis_signal)
+        else:
+            logger.info("  Diagnosis demand: clear")
 
     updates: dict = {
         "de_identified_message": de_identified,

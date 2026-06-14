@@ -45,10 +45,14 @@ async def clarification_node(state: TriageState) -> dict:
     if "original_message" not in form:
         form["original_message"] = state.get("de_identified_message", "")
 
-    # Safety valve — after max turns, default to safest routing
+    # Safety valve — after max turns, use Haiku's last confirmed intent if available,
+    # otherwise fall back to UC1 (most conservative clinical choice).
     if turns >= _MAX_CLARIFICATION_TURNS:
-        fallback = "UC1" if "UC1" in detected else (detected[0] if detected else "UC1")
-        logger.info("Clarification: max turns reached, defaulting to %s", fallback)
+        fallback = (
+            form.get("haiku_confirmed_intent")
+            or ("UC1" if "UC1" in detected else (detected[0] if detected else "UC1"))
+        )
+        logger.info("Clarification: max turns reached, routing to %s", fallback)
         return _complete_routing(fallback, form, turns)
 
     # Call Haiku to extract data and generate next question
@@ -63,6 +67,10 @@ async def clarification_node(state: TriageState) -> dict:
     for k, v in result.extracted.items():
         if v is not None:
             form[k] = v
+
+    # Track the latest Haiku-confirmed intent so the safety valve can use it
+    if result.intent_confirmed:
+        form["haiku_confirmed_intent"] = result.intent_confirmed
 
     logger.info(
         "Clarification turn %d: intent_confirmed=%s complete=%s",
