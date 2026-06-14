@@ -13,7 +13,16 @@ def get_classifier():
     if _classifier is None:
         from sentence_transformers import CrossEncoder
         logger.info("Loading cross-encoder/nli-deberta-v3-xsmall (~90MB)...")
-        _classifier = CrossEncoder("cross-encoder/nli-deberta-v3-xsmall")
+        try:
+            # Use cached weights without any HuggingFace network calls
+            _classifier = CrossEncoder(
+                "cross-encoder/nli-deberta-v3-xsmall",
+                local_files_only=True,
+            )
+        except Exception:
+            # First run: weights not cached yet — download once, then cache
+            logger.info("Cache miss — downloading from HuggingFace Hub (one-time)...")
+            _classifier = CrossEncoder("cross-encoder/nli-deberta-v3-xsmall")
         logger.info("Classifier ready.")
     return _classifier
 
