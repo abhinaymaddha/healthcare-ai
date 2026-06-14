@@ -6,7 +6,6 @@ from models.state import TriageState
 from tools.emergency import dispatch_emergency_services, notify_human_reviewer
 from prompts.guardrail import (
     ASK_DISPATCH,
-    DISPATCHED_MSG,
     DECLINED_DISPATCH_MSG,
     HITL_MSG,
 )

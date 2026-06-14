@@ -353,7 +353,7 @@ def build_report(results: list[CaseResult]) -> str:
             lines.append(f"\n[{r.id}] {r.category}/{r.subcategory}")
             lines.append(f"  Notes: {r.notes}")
             for reason in r.failure_reasons:
-                lines.append(f"  ✗ {reason}")
+                lines.append(f"  FAIL: {reason}")
             # Show last response excerpt for debugging
             if r.turn_results:
                 last = r.turn_results[-1]
@@ -398,6 +398,12 @@ def parse_args() -> argparse.Namespace:
         default=CONCURRENCY,
         help="Max parallel requests",
     )
+    p.add_argument(
+        "--session-prefix",
+        default=None,
+        help="Prefix to prepend to all session IDs (default: auto timestamp). "
+             "Use to prevent MemorySaver state contamination between runs.",
+    )
     return p.parse_args()
 
 
@@ -410,7 +416,7 @@ async def main() -> int:
         print(f"Error: test cases file not found: {cases_path}", file=sys.stderr)
         return 1
 
-    with cases_path.open() as f:
+    with cases_path.open(encoding="utf-8") as f:
         all_cases: list[dict] = json.load(f)
 
     # Filter
@@ -426,8 +432,14 @@ async def main() -> int:
             print(f"Error: no cases in category '{args.category}'", file=sys.stderr)
             return 1
 
+    # Prefix session IDs to avoid MemorySaver state from previous runs
+    session_prefix = args.session_prefix or f"run{int(time.monotonic() * 1000) % 100000}-"
+    for case in cases:
+        case["session_id"] = session_prefix + case["session_id"]
+
     print(f"Running {len(cases)} test case(s) against {TRIAGE_ENDPOINT}")
     print(f"Concurrency: {args.concurrency}")
+    print(f"Session prefix: {session_prefix}")
 
     semaphore = asyncio.Semaphore(args.concurrency)
     results: list[CaseResult] = []

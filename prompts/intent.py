@@ -2,7 +2,7 @@
 Intent classification prompt — few-shot, structured JSON output.
 
 Used when the local NLI classifier scores below the confidence threshold
-and a Haiku call is made to confirm the intent.
+and a small LLM call is made to confirm the intent.
 """
 from __future__ import annotations
 import json
@@ -10,11 +10,12 @@ import logging
 from typing import Literal
 from pydantic import BaseModel
 from models.llm import LLMConfig, LLMRequest, LLMMessage
+from config.llm_configs import SMALL_MODEL, DEFAULT_PROVIDER
 
 logger = logging.getLogger(__name__)
 
-_MODEL = "anthropic/claude-haiku-4-5"
-_PROVIDER = "openrouter"
+_MODEL = SMALL_MODEL
+_PROVIDER = DEFAULT_PROVIDER
 
 # ── Output schema ─────────────────────────────────────────────────────────────
 

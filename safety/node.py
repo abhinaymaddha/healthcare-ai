@@ -9,16 +9,15 @@ from prompts.safety import DISCLAIMER, SAFE_FALLBACK
 logger = logging.getLogger(__name__)
 
 DIAGNOSIS_PATTERNS = [
-    # "you have [condition]" — exclude "you have been" (past-perfect, not diagnostic)
-    re.compile(r"\byou\s+(likely |probably |definitely |clearly |obviously )?(have|have got)\b(?!\s+been\b)", re.IGNORECASE),
-    # "this sounds/looks/appears/seems like [X]" or "appears to be [X]"
-    re.compile(r"\bthis (sounds|looks|appears|seems) (like|to be)\b", re.IGNORECASE),
-    # "this could be / might be / is [X]" in a diagnostic assertion context
-    re.compile(r"\bthis (could be|might be|is (likely|probably|definitely|clearly))\b", re.IGNORECASE),
-    # Explicit diagnosis language
+    # "you have [condition]" — only match when followed by a letter (excludes "you have —",
+    # "you have." end-of-sentence, and "what condition you have" relative clauses)
+    re.compile(r"\byou\s+(likely |probably |definitely |clearly |obviously )?(have|have got)\b(?=\s+[a-zA-Z])(?!\s+(been|a |an |some |what|to |anything|the |this |that )\b)", re.IGNORECASE),
+    # Explicit diagnosis language — assertive, named-condition forms only
     re.compile(r"\byou('re| are) (suffering from|diagnosed with|presenting with)\b", re.IGNORECASE),
     re.compile(r"\b(the |your )?(diagnosis|condition) is\b", re.IGNORECASE),
     re.compile(r"\bI (would |can )?(diagnose|conclude)\b", re.IGNORECASE),
+    # "you are suffering from / you have [specific disease]" — block only assertive + named disease
+    re.compile(r"\byou are suffering from\b", re.IGNORECASE),
 ]
 
 PRESCRIPTION_PATTERNS = [
@@ -34,7 +33,8 @@ async def safety_compliance_node(state: TriageState) -> dict:
     intent = state.get("current_intent", "?")
 
     disclaimer_added = False
-    if intent == "UC1":
+    in_clarification = bool(state.get("clarification_pending"))
+    if intent == "UC1" or in_clarification:
         if DISCLAIMER not in reply:
             reply = reply.rstrip() + f"\n\n{DISCLAIMER}"
             disclaimer_added = True

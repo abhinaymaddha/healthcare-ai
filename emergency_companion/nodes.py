@@ -47,17 +47,25 @@ async def intake_node(state: TriageState) -> dict:
 
     logger.info("  [EMERGENCY INTAKE] Sending %d messages to medium-size LLM", len(messages))
 
-    client = get_llm_client()
-    response = await client.complete(build_intake_request(history))
-    result = EmergencyIntakeResult.parse(response.content)
+    try:
+        client = get_llm_client()
+        response = await client.complete(build_intake_request(history))
+        result = EmergencyIntakeResult.parse(response.content)
+        cost = response.estimated_cost_usd
+        calls = 1
+    except Exception as exc:
+        logger.error("  [EMERGENCY INTAKE] LLM call failed: %s — using fallback", exc)
+        result = EmergencyIntakeResult.parse("")   # triggers the hardcoded fallback
+        cost = 0.0
+        calls = 0
 
     logger.info("  [EMERGENCY INTAKE] Summary: %r", result.situation_summary[:120])
 
     return {
         "emergency_summary": result.situation_summary,
         "patient_response": result.response,
-        "total_cost_usd": state.get("total_cost_usd", 0.0) + response.estimated_cost_usd,
-        "llm_calls": state.get("llm_calls", 0) + 1,
+        "total_cost_usd": state.get("total_cost_usd", 0.0) + cost,
+        "llm_calls": state.get("llm_calls", 0) + calls,
     }
 
 

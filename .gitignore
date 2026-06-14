@@ -28,6 +28,10 @@ server_err.log
 # Test output
 eval/report.txt
 eval/report.json
+eval/server_latest.log
+
+# Local submission notes (not for repo)
+TODO_SUBMISSION.md
 
 # IDE
 .vscode/

@@ -2,6 +2,22 @@
 from __future__ import annotations
 from langgraph.graph import StateGraph, START, END
 from langgraph.checkpoint.memory import MemorySaver
+from langgraph.types import RetryPolicy
+
+# ---------------------------------------------------------------------------
+# Retry tiers — applied per-node based on call criticality.
+#
+# max_attempts = total attempts (initial + retries):
+#   HIGH  → 4 attempts (3 retries)  — emergency companion, clinical reply gen
+#   MED   → 3 attempts (2 retries)  — extraction, clarification, appointment
+#   LOW   → 2 attempts (1 retry)    — intent classification, summarization
+#
+# Backoff: 0.5 s → 1 s → 2 s (HIGH), 0.5 s → 1 s (MED), 0.5 s (LOW)
+# Jitter is enabled by default to avoid thundering-herd on rate-limit windows.
+# ---------------------------------------------------------------------------
+_RETRY_HIGH = RetryPolicy(max_attempts=4, initial_interval=0.5, backoff_factor=2.0)
+_RETRY_MED  = RetryPolicy(max_attempts=3, initial_interval=0.5, backoff_factor=2.0)
+_RETRY_LOW  = RetryPolicy(max_attempts=2, initial_interval=0.5, backoff_factor=2.0)
 
 from models.state import TriageState
 from guardrail.node import guardrail_node, route_after_guardrail
@@ -34,8 +50,9 @@ from safety.node import safety_compliance_node, response_formatter_node
 
 def _build_uc2_subgraph():
     uc2 = StateGraph(TriageState)
-    uc2.add_node("extract_medications",    extract_medications_node)
-    uc2.add_node("confirmation_loop",      confirmation_loop_node)
+    # MED retry: extraction + confirmation both call the small LLM
+    uc2.add_node("extract_medications",    extract_medications_node,         retry=_RETRY_MED)
+    uc2.add_node("confirmation_loop",      confirmation_loop_node,           retry=_RETRY_MED)
     uc2.add_node("check_prescription",     check_prescription_node)
     uc2.add_node("offer_appointment",      offer_appointment_node)
     uc2.add_node("handle_offer",           handle_no_prescription_response_node)
@@ -68,9 +85,10 @@ def _build_uc2_subgraph():
 def _build_uc3_subgraph():
     uc3 = StateGraph(TriageState)
     uc3.add_node("load_patient",   load_patient_and_history_node)
-    uc3.add_node("collect_prefs",  collect_preferences_node)
+    # MED retry: collect_prefs and confirm_slot both make LLM calls
+    uc3.add_node("collect_prefs",  collect_preferences_node,    retry=_RETRY_MED)
     uc3.add_node("fetch_slots",    fetch_slots_node)
-    uc3.add_node("confirm_slot",   confirm_appointment_node)
+    uc3.add_node("confirm_slot",   confirm_appointment_node,    retry=_RETRY_MED)
     uc3.add_node("book",           book_appointment_node)
 
     # load_patient always runs first to populate patient info
@@ -95,8 +113,9 @@ def _build_uc3_subgraph():
 
 def _build_emergency_companion_subgraph():
     g = StateGraph(TriageState)
-    g.add_node("intake",    intake_node)
-    g.add_node("companion", companion_node)
+    # HIGH retry: both nodes run during active emergency dispatch
+    g.add_node("intake",    intake_node,    retry=_RETRY_HIGH)
+    g.add_node("companion", companion_node, retry=_RETRY_HIGH)
     g.add_conditional_edges(START, route_emergency_entry, {
         "intake":    "intake",
         "companion": "companion",
@@ -116,18 +135,21 @@ def build_graph(checkpointer=None):
 
     graph = StateGraph(TriageState)
 
+    # No retry — pure local logic, no LLM calls
     graph.add_node("guardrail",           guardrail_node)
     graph.add_node("emergency",           emergency_node)
-    graph.add_node("emergency_companion", emergency_companion_subgraph)
-    graph.add_node("intent_router",      intent_router_node)
-    graph.add_node("clarification",      clarification_node)
-    graph.add_node("uc1",                symptom_check_node)
-    graph.add_node("uc2",                uc2_subgraph)
-    graph.add_node("uc3",                uc3_subgraph)
-    graph.add_node("summarize_uc1",      summarize_uc1_node)
-    graph.add_node("summarize_uc2",      summarize_uc2_node)
-    graph.add_node("safety_compliance",  safety_compliance_node)
-    graph.add_node("response_formatter", response_formatter_node)
+    graph.add_node("safety_compliance",   safety_compliance_node)
+    graph.add_node("response_formatter",  response_formatter_node)
+
+    # Retry tiers for LLM-calling nodes
+    graph.add_node("emergency_companion", emergency_companion_subgraph)           # inner nodes carry HIGH retry
+    graph.add_node("uc1",                symptom_check_node,  retry=_RETRY_HIGH) # medium LLM, clinical reply
+    graph.add_node("clarification",      clarification_node,  retry=_RETRY_MED)  # small LLM, routing-critical
+    graph.add_node("intent_router",      intent_router_node,  retry=_RETRY_LOW)  # small LLM, NLI fallback exists
+    graph.add_node("uc2",                uc2_subgraph)                            # inner nodes carry MED retry
+    graph.add_node("uc3",                uc3_subgraph)                            # inner nodes carry MED retry
+    graph.add_node("summarize_uc1",      summarize_uc1_node,  retry=_RETRY_LOW)  # small LLM, non-blocking
+    graph.add_node("summarize_uc2",      summarize_uc2_node,  retry=_RETRY_LOW)  # small LLM, non-blocking
 
     graph.add_edge(START, "guardrail")
 
@@ -152,10 +174,10 @@ def build_graph(checkpointer=None):
         "clarification": "clarification",
     })
 
-    # Clarification loop: ask a question → await reply → back to intent_router
+    # Clarification loop: ask a question → safety_compliance (adds disclaimer) → patient
     graph.add_conditional_edges("clarification", route_after_clarification, {
-        "question": "response_formatter",  # still collecting → send question to patient
-        "route":    "intent_router",       # confirmed → dispatch to UC
+        "question": "safety_compliance",  # still collecting → add disclaimer → send to patient
+        "route":    "intent_router",      # confirmed → dispatch to UC
     })
 
     graph.add_conditional_edges("uc1", route_after_uc1, {

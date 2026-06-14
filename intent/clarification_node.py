@@ -65,6 +65,9 @@ async def clarification_node(state: TriageState) -> dict:
 
     # Merge extracted fields into form (never overwrite with None)
     for k, v in result.extracted.items():
+        # LLMs sometimes return "true"/"false" strings instead of JSON booleans
+        if k == "emergency_signs" and isinstance(v, str):
+            v = {"true": True, "false": False}.get(v.lower())
         if v is not None:
             form[k] = v
 
@@ -114,7 +117,7 @@ def _complete_routing(intent: str, form: dict, turns: int) -> dict:
         # UC2/UC3: restore original message so extraction nodes work correctly
         effective_message = original_msg
 
-    return {
+    result: dict = {
         "current_intent": intent,
         "clarification_pending": False,
         "clarification_form": form,
@@ -122,6 +125,12 @@ def _complete_routing(intent: str, form: dict, turns: int) -> dict:
         "de_identified_message": effective_message,
         "patient_response": None,
     }
+
+    # Pass collected reason into UC3 so collect_preferences_node skips re-asking
+    if intent == "UC3" and form.get("primary_concern"):
+        result["reason_for_visit"] = form["primary_concern"]
+
+    return result
 
 
 def route_after_clarification(state: TriageState) -> str:

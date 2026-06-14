@@ -7,9 +7,10 @@ only the essential context, not the full conversation transcript.
 """
 from __future__ import annotations
 from models.llm import LLMConfig, LLMRequest, LLMMessage
+from config.llm_configs import SMALL_MODEL, DEFAULT_PROVIDER
 
-_MODEL = "anthropic/claude-haiku-4-5"
-_PROVIDER = "openrouter"
+_MODEL = SMALL_MODEL
+_PROVIDER = DEFAULT_PROVIDER
 
 # ── UC1 → UC3 handoff summary ──────────────────────────────────────────────────
 

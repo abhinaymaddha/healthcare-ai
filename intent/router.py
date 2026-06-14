@@ -37,6 +37,30 @@ async def intent_router_node(state: TriageState) -> dict:
     if state.get("clarification_pending"):
         return {}
 
+    message = state.get("de_identified_message", "")
+    history = list(state.get("intent_history") or [])
+
+    # Prescription demand phrases signal UC1 (health guidance), not UC2 (refill).
+    # Checked BEFORE the UC-completion early-exit so demands override mid-session UC2.
+    _PRESCRIPTION_DEMAND = [
+        "prescribe me", "give me a prescription", "write me a prescription",
+        "what dosage should i take", "what dose should i take",
+        "maximum safe dose", "safe dose of", "safe dosage of",
+        "what dosage", "what dose of", "correct dosage", "correct dose",
+        "which medication should i", "what medication should i switch",
+    ]
+    msg_lower = message.lower()
+    for phrase in _PRESCRIPTION_DEMAND:
+        if phrase in msg_lower:
+            logger.info("  [INTENT] Prescription demand detected → forcing UC1")
+            history.append("UC1")
+            return {
+                "current_intent": "UC1",
+                "intent_history": history,
+                "pending_intent": None,
+                "clarification_pending": False,
+            }
+
     # Stay in the current UC if it is not yet complete
     current = state.get("current_intent")
     if current == "UC1" and not state.get("uc1_complete"):
@@ -49,7 +73,6 @@ async def intent_router_node(state: TriageState) -> dict:
     # Carry forward a pending intent queued by a previous UC
     pending = state.get("pending_intent")
     if pending:
-        history = list(state.get("intent_history") or [])
         history.append(pending)
         return {
             "current_intent": pending,
@@ -57,9 +80,7 @@ async def intent_router_node(state: TriageState) -> dict:
             "intent_history": history,
         }
 
-    message = state.get("de_identified_message", "")
     labels = list(_NLI_LABELS.keys())
-
     score_map = all_scores(message, labels)
     sorted_items = sorted(score_map.items(), key=lambda x: x[1], reverse=True)
 
@@ -76,8 +97,6 @@ async def intent_router_node(state: TriageState) -> dict:
         _NLI_LABELS[sorted_items[2][0]], sorted_items[2][1],
         gap,
     )
-
-    history = list(state.get("intent_history") or [])
 
     # ── Very high confidence → direct route (skip Haiku) ─────────────────────
     if top_score >= _DIRECT_SCORE and gap >= _DIRECT_GAP:

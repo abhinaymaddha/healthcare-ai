@@ -14,9 +14,29 @@ HIGH_ACUITY_TERMS = [
     "vision loss", "worst headache of my life", "jaw pain", "left arm",
 ]
 MEDIUM_ACUITY_TERMS = [
-    "persistent", "ongoing", "for weeks", "getting worse", "worsening",
-    "not improving", "3 days", "4 days", "5 days", "a week", "two weeks",
-    "spreading",
+    # Duration — days (numeric)
+    "2 days", "3 days", "4 days", "5 days", "6 days", "7 days",
+    # Duration — days (written)
+    "two days", "three days", "four days", "five days", "six days", "seven days",
+    "a few days", "few days", "several days", "past few days", "last few days",
+    # Duration — weeks
+    "a week", "1 week", "2 weeks", "3 weeks", "4 weeks",
+    "one week", "two weeks", "three weeks", "four weeks",
+    "past week", "last week", "for weeks", "several weeks",
+    # Duration — months
+    "a month", "past month", "last month", "for months", "several months",
+    "few months", "a few months", "for the past month",
+    # Progression
+    "getting worse", "worsening", "not improving", "no improvement",
+    "hasn't improved", "has not improved", "not getting better",
+    "not going away", "won't go away", "keeps coming back", "comes back",
+    "spreading", "spreading to",
+    "not helping", "isn't helping", "not working", "isn't working",
+    "no relief", "not cleared up", "hasn't cleared",
+    # Pattern
+    "persistent", "ongoing", "recurring", "recurrent", "chronic", "lingering",
+    "on and off", "on-and-off", "intermittent", "comes and goes",
+    "daily", "every day", "each day", "multiple times a day",
 ]
 MENTAL_HEALTH_CRISIS_TERMS = [
     "suicidal", "self-harm", "want to die", "end my life", "hopeless",

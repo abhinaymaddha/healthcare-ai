@@ -6,6 +6,18 @@ Built with **LangGraph** for stateful multi-turn orchestration, a two-tier LLM s
 
 ---
 
+## Deliverables
+
+All submission artifacts are in [`deliverables/`](deliverables/). Start with [`deliverables/README.md`](deliverables/README.md) for a guided reading order:
+
+1. **[Executive Summary](deliverables/EXECUTIVE_SUMMARY.md)** — business case and pilot recommendation for clinical leadership
+2. **[High-Level Architecture](deliverables/HIGH_LEVEL_ARCHITECTURE.md)** — patient workflows, PHI protection, safety and compliance (clinical/business audience)
+3. **[Architecture Decisions](deliverables/ARCHITECTURE_DECISIONS.md)** — design principles, technology choices, cost model
+4. **[Low-Level Architecture](deliverables/LOW_LEVEL_ARCHITECTURE.md)** — infrastructure, data schemas, LangGraph implementation (engineering audience)
+5. **[Future Scope](deliverables/FUTURE_SCOPE.md)** — five planned improvement areas with problem statements and direction
+
+---
+
 ## Architecture overview
 
 See [ARCHITECTURE.md](ARCHITECTURE.md) for the full breakdown, including:

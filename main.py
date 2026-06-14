@@ -15,7 +15,15 @@ from graph.main_graph import build_graph
 from models.classifier import get_classifier
 
 load_dotenv()
-logging.basicConfig(level=logging.INFO)
+
+# Console + file logging — file lets you grep by session_id after an eval run
+_log_formatter = logging.Formatter("%(asctime)s %(name)s %(levelname)s %(message)s")
+_console_handler = logging.StreamHandler()
+_console_handler.setFormatter(_log_formatter)
+_file_handler = logging.FileHandler("eval/server_latest.log", mode="w", encoding="utf-8")
+_file_handler.setFormatter(_log_formatter)
+logging.basicConfig(level=logging.INFO, handlers=[_console_handler, _file_handler])
+
 logger = logging.getLogger(__name__)
 
 _graph = None

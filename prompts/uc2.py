@@ -17,11 +17,12 @@ import logging
 from typing import Optional
 from pydantic import BaseModel
 from models.llm import LLMConfig, LLMRequest, LLMMessage
+from config.llm_configs import SMALL_MODEL, DEFAULT_PROVIDER
 
 logger = logging.getLogger(__name__)
 
-_MODEL = "anthropic/claude-haiku-4-5"
-_PROVIDER = "openrouter"
+_MODEL = SMALL_MODEL
+_PROVIDER = DEFAULT_PROVIDER
 
 # ── Output schema ─────────────────────────────────────────────────────────────
 

@@ -30,13 +30,17 @@ def uc2_resume_router(state: TriageState) -> str:
     if not medications:
         return "extract"
 
+    # Flow already completed — don't re-extract on subsequent turns
+    if state.get("uc2_complete"):
+        return "confirmation_loop"
+
     if state.get("uc2_awaiting_confirmation"):
         if _patient_confirmed(state):
             return "check_prescription"
         return "confirmation_loop"   # re-show summary or handle correction
 
     prescription_status = state.get("prescription_status")
-    if prescription_status == "not_found" and not state.get("uc2_complete"):
+    if prescription_status == "not_found":
         return "handle_offer"
 
     return "extract"

@@ -56,11 +56,13 @@ def detect_and_deidentify(text: str) -> tuple[str, dict, list]:
             if phi_type not in phi_found:
                 phi_found.append(phi_type)
 
-    # spaCy NER for names, dates, locations
+    # spaCy NER for names and dates only.
+    # GPE/LOC are excluded: cities and countries are not PHI, and NER
+    # misclassifies medication brand names (e.g. "Ventolin") as GPE.
     nlp = _get_nlp()
     doc = nlp(result)
     for ent in reversed(doc.ents):          # reversed to preserve offsets
-        if ent.label_ in ("PERSON", "DATE", "GPE", "LOC"):
+        if ent.label_ in ("PERSON", "DATE"):
             token = _make_token(ent.label_.lower(), ent.text)
             lookup[token] = ent.text
             result = result[:ent.start_char] + token + result[ent.end_char:]
