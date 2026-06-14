@@ -31,11 +31,12 @@ async def emergency_node(state: TriageState) -> dict:
     logger.info("  [EMERGENCY] Patient replied: %r", last[:120])
 
     if any(w in last.lower() for w in ["yes", "yeah", "please", "do it", "call"]):
-        logger.info("  [EMERGENCY] Dispatch confirmed → calling emergency services")
+        logger.info("  [EMERGENCY] Dispatch confirmed → calling emergency services → activating companion")
         await dispatch_emergency_services(patient_id=state.get("patient_id", "unknown"))
+        # patient_response intentionally left unset — companion intake_node generates it
         return {
             "awaiting_911_confirmation": False,
-            "patient_response": DISPATCHED_MSG,
+            "emergency_dispatched": True,
         }
 
     if any(w in last.lower() for w in ["no", "nope", "don't", "cancel"]):
@@ -57,3 +58,10 @@ async def emergency_node(state: TriageState) -> dict:
         "awaiting_911_confirmation": False,
         "patient_response": HITL_MSG,
     }
+
+
+def route_after_emergency(state: TriageState) -> str:
+    """After dispatch confirmed, hand off to companion subgraph. Otherwise format response."""
+    if state.get("emergency_dispatched"):
+        return "emergency_companion"
+    return "response_formatter"

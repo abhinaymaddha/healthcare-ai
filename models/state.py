@@ -58,6 +58,8 @@ class TriageState(TypedDict):
     # Emergency / HITL
     awaiting_911_confirmation: bool
     hitl_triggered: bool
+    emergency_dispatched: bool       # True once patient confirmed dispatch; activates companion subgraph
+    emergency_summary: Optional[str] # medium LLM's situational briefing from full conversation history
 
     # Response to patient
     patient_response: Optional[str]

@@ -101,7 +101,10 @@ async def guardrail_node(state: TriageState) -> dict:
 
 
 def route_after_guardrail(state: TriageState) -> str:
-    # Bug E fix: patient replying to the 911 prompt must re-enter emergency node
+    # Once dispatch is confirmed, every turn goes to the companion subgraph
+    if state.get("emergency_dispatched"):
+        return "emergency_companion"
+    # Patient replying to the 911 dispatch question
     if state.get("awaiting_911_confirmation"):
         return "escalation"
     if state.get("response_blocked"):

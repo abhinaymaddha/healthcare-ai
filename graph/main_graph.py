@@ -5,8 +5,9 @@ from langgraph.checkpoint.memory import MemorySaver
 
 from models.state import TriageState
 from guardrail.node import guardrail_node, route_after_guardrail
-from guardrail.emergency_node import emergency_node
+from guardrail.emergency_node import emergency_node, route_after_emergency
 from intent.router import intent_router_node, route_intent
+from emergency_companion.nodes import intake_node, companion_node, route_emergency_entry
 from intent.clarification_node import clarification_node, route_after_clarification
 from uc1_symptom_check.nodes import symptom_check_node, route_after_uc1
 from uc2_prescription_refill.nodes import (
@@ -92,17 +93,32 @@ def _build_uc3_subgraph():
     return uc3.compile()
 
 
+def _build_emergency_companion_subgraph():
+    g = StateGraph(TriageState)
+    g.add_node("intake",    intake_node)
+    g.add_node("companion", companion_node)
+    g.add_conditional_edges(START, route_emergency_entry, {
+        "intake":    "intake",
+        "companion": "companion",
+    })
+    g.add_edge("intake",    END)
+    g.add_edge("companion", END)
+    return g.compile()
+
+
 def build_graph(checkpointer=None):
     if checkpointer is None:
         checkpointer = MemorySaver()
 
-    uc2_subgraph = _build_uc2_subgraph()
-    uc3_subgraph = _build_uc3_subgraph()
+    uc2_subgraph               = _build_uc2_subgraph()
+    uc3_subgraph               = _build_uc3_subgraph()
+    emergency_companion_subgraph = _build_emergency_companion_subgraph()
 
     graph = StateGraph(TriageState)
 
-    graph.add_node("guardrail",          guardrail_node)
-    graph.add_node("emergency",          emergency_node)
+    graph.add_node("guardrail",           guardrail_node)
+    graph.add_node("emergency",           emergency_node)
+    graph.add_node("emergency_companion", emergency_companion_subgraph)
     graph.add_node("intent_router",      intent_router_node)
     graph.add_node("clarification",      clarification_node)
     graph.add_node("uc1",                symptom_check_node)
@@ -116,12 +132,18 @@ def build_graph(checkpointer=None):
     graph.add_edge(START, "guardrail")
 
     graph.add_conditional_edges("guardrail", route_after_guardrail, {
-        "blocked":    "response_formatter",
-        "escalation": "emergency",
-        "pass":       "intent_router",
+        "blocked":             "response_formatter",
+        "escalation":          "emergency",
+        "emergency_companion": "emergency_companion",
+        "pass":                "intent_router",
     })
 
-    graph.add_edge("emergency", "response_formatter")
+    graph.add_conditional_edges("emergency", route_after_emergency, {
+        "emergency_companion": "emergency_companion",
+        "response_formatter":  "response_formatter",
+    })
+
+    graph.add_edge("emergency_companion", "response_formatter")
 
     graph.add_conditional_edges("intent_router", route_intent, {
         "UC1":           "uc1",

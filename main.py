@@ -105,6 +105,8 @@ def _initial_state(session_id: str) -> dict:
         "uc3_complete": False,
         "awaiting_911_confirmation": False,
         "hitl_triggered": False,
+        "emergency_dispatched": False,
+        "emergency_summary": None,
         "patient_response": None,
         "response_blocked": False,
         "block_reason": None,
