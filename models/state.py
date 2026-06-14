@@ -49,6 +49,12 @@ class TriageState(TypedDict):
     appointment_id: Optional[str]
     uc3_complete: bool
 
+    # Clarification / intake form
+    clarification_pending: bool          # True while asking clarifying questions
+    detected_intents: list               # NLI top-2 intents with meaningful scores
+    clarification_form: dict             # structured data collected so far
+    clarification_turns: int             # safety valve — max 3 turns
+
     # Emergency / HITL
     awaiting_911_confirmation: bool
     hitl_triggered: bool

@@ -7,6 +7,7 @@ from models.state import TriageState
 from guardrail.node import guardrail_node, route_after_guardrail
 from guardrail.emergency_node import emergency_node
 from intent.router import intent_router_node, route_intent
+from intent.clarification_node import clarification_node, route_after_clarification
 from uc1_symptom_check.nodes import symptom_check_node, route_after_uc1
 from uc2_prescription_refill.nodes import (
     uc2_resume_router,
@@ -103,6 +104,7 @@ def build_graph(checkpointer=None):
     graph.add_node("guardrail",          guardrail_node)
     graph.add_node("emergency",          emergency_node)
     graph.add_node("intent_router",      intent_router_node)
+    graph.add_node("clarification",      clarification_node)
     graph.add_node("uc1",                symptom_check_node)
     graph.add_node("uc2",                uc2_subgraph)
     graph.add_node("uc3",                uc3_subgraph)
@@ -122,9 +124,16 @@ def build_graph(checkpointer=None):
     graph.add_edge("emergency", "response_formatter")
 
     graph.add_conditional_edges("intent_router", route_intent, {
-        "UC1": "uc1",
-        "UC2": "uc2",
-        "UC3": "uc3",
+        "UC1":           "uc1",
+        "UC2":           "uc2",
+        "UC3":           "uc3",
+        "clarification": "clarification",
+    })
+
+    # Clarification loop: ask a question → await reply → back to intent_router
+    graph.add_conditional_edges("clarification", route_after_clarification, {
+        "question": "response_formatter",  # still collecting → send question to patient
+        "route":    "intent_router",       # confirmed → dispatch to UC
     })
 
     graph.add_conditional_edges("uc1", route_after_uc1, {

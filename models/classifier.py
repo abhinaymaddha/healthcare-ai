@@ -18,22 +18,20 @@ def get_classifier():
     return _classifier
 
 
-def top_label(text: str, labels: list[str]) -> tuple[str, float]:
-    """
-    Return (best_label, entailment_score).
-    DeBERTa NLI returns shape (n_pairs, 3): [contradiction, entailment, neutral].
-    We compare the entailment score across all label pairs and pick the highest.
-    """
+def all_scores(text: str, labels: list[str]) -> dict[str, float]:
+    """Return entailment score for every label."""
     clf = get_classifier()
     raw = clf.predict([(text, label) for label in labels])
     scores = np.array(raw)
-
     if scores.ndim == 2:
-        # Multi-class NLI output — extract entailment column
         entailment_scores = scores[:, _entailment_idx]
     else:
-        # Single score per pair (binary model)
         entailment_scores = scores
+    return dict(zip(labels, [float(s) for s in entailment_scores]))
 
-    best_idx = int(entailment_scores.argmax())
-    return labels[best_idx], float(entailment_scores[best_idx])
+
+def top_label(text: str, labels: list[str]) -> tuple[str, float]:
+    """Return (best_label, entailment_score)."""
+    score_map = all_scores(text, labels)
+    best = max(score_map, key=score_map.__getitem__)
+    return best, score_map[best]
