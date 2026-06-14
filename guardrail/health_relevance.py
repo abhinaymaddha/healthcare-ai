@@ -27,14 +27,24 @@ HEALTH_LABELS = [_HEALTH_LABEL, _NON_HEALTH_LABEL]
 _HEALTH_CONFIDENCE_THRESHOLD = 0.5
 
 
+import logging as _logging
+_logger = _logging.getLogger(__name__)
+
+
 def is_health_related(text: str) -> bool:
     text_lower = text.lower()
 
-    # Fast-pass: obvious health keywords skip the NLI call entirely
-    if any(kw in text_lower for kw in _HEALTH_KEYWORDS):
-        return True
+    for kw in _HEALTH_KEYWORDS:
+        if kw in text_lower:
+            _logger.info("  Health: keyword-pass (%r) → HEALTH-RELATED", kw)
+            return True
 
-    # NLI for ambiguous or borderline messages
     from models.classifier import top_label
     best, score = top_label(text, HEALTH_LABELS)
-    return best == _HEALTH_LABEL and score >= _HEALTH_CONFIDENCE_THRESHOLD
+    result = best == _HEALTH_LABEL and score >= _HEALTH_CONFIDENCE_THRESHOLD
+    label_short = "health" if best == _HEALTH_LABEL else "non-health"
+    _logger.info(
+        "  Health: NLI → %s (score=%.2f) → %s",
+        label_short, score, "HEALTH-RELATED" if result else "NOT HEALTH-RELATED",
+    )
+    return result

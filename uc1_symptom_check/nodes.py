@@ -24,31 +24,36 @@ MENTAL_HEALTH_CRISIS_TERMS = [
 ]
 
 
-def _classify_acuity(message: str, needs_escalation: bool) -> str:
+
+def _classify_acuity_with_reason(message: str, needs_escalation: bool) -> tuple[str, str]:
     if needs_escalation:
-        return "High"
+        return "High", "emergency escalation flag"
     text_lower = message.lower()
-    if any(t in text_lower for t in MENTAL_HEALTH_CRISIS_TERMS):
-        return "High"
-    if any(t in text_lower for t in HIGH_ACUITY_TERMS):
-        return "High"
-    if any(t in text_lower for t in MEDIUM_ACUITY_TERMS):
-        return "Medium"
-    return "Low"
+    for t in MENTAL_HEALTH_CRISIS_TERMS:
+        if t in text_lower:
+            return "High", f"mental health term: {t!r}"
+    for t in HIGH_ACUITY_TERMS:
+        if t in text_lower:
+            return "High", f"high-acuity term: {t!r}"
+    for t in MEDIUM_ACUITY_TERMS:
+        if t in text_lower:
+            return "Medium", f"medium-acuity term: {t!r}"
+    return "Low", "no acuity terms matched"
 
 
 async def symptom_check_node(state: TriageState) -> dict:
     message = state.get("de_identified_message", "")
     needs_escalation = state.get("needs_escalation", False)
-    acuity = _classify_acuity(message, needs_escalation)
+    acuity, acuity_reason = _classify_acuity_with_reason(message, needs_escalation)
+    logger.info("  [UC1] Acuity=%s (%s)", acuity, acuity_reason)
     first_name = state.get("patient_first_name") or None
 
     client = get_llm_client()
     response = await client.complete(
         build_symptom_response_request(message, acuity, first_name)
     )
+    logger.info("  [UC1] LLM response generated (cost=$%.4f)", response.estimated_cost_usd)
 
-    # Check if we should offer appointment booking at end
     patient_id = state.get("patient_id")
     appointment_offer = ""
     if acuity in ("Low", "Medium") and patient_id:

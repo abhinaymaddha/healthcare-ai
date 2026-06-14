@@ -31,26 +31,37 @@ PRESCRIPTION_PATTERNS = [
 
 async def safety_compliance_node(state: TriageState) -> dict:
     reply = state.get("patient_response") or ""
+    intent = state.get("current_intent", "?")
 
-    # Symptom check replies must always have disclaimer
-    if state.get("current_intent") == "UC1":
+    disclaimer_added = False
+    if intent == "UC1":
         if DISCLAIMER not in reply:
             reply = reply.rstrip() + f"\n\n{DISCLAIMER}"
+            disclaimer_added = True
 
     violations = []
-    if any(p.search(reply) for p in DIAGNOSIS_PATTERNS):
-        violations.append("diagnosis_violation")
-    if any(p.search(reply) for p in PRESCRIPTION_PATTERNS):
-        violations.append("prescription_violation")
+    for p in DIAGNOSIS_PATTERNS:
+        m = p.search(reply)
+        if m:
+            violations.append(f"diagnosis:{m.group(0)!r}")
+    for p in PRESCRIPTION_PATTERNS:
+        m = p.search(reply)
+        if m:
+            violations.append(f"prescription:{m.group(0)!r}")
 
     if violations:
-        logger.warning(f"Compliance violations: {violations}")
+        logger.warning(
+            "  [SAFETY] VIOLATIONS detected — %s → replacing with safe fallback", violations
+        )
         return {
             "patient_response": SAFE_FALLBACK,
             "response_blocked": True,
             "block_reason": f"compliance_fail:{','.join(violations)}",
         }
 
+    logger.info(
+        "  [SAFETY] OK (intent=%s, disclaimer_added=%s)", intent, disclaimer_added
+    )
     return {"patient_response": reply}
 
 

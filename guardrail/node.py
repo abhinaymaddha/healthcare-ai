@@ -13,13 +13,21 @@ logger = logging.getLogger(__name__)
 
 async def guardrail_node(state: TriageState) -> dict:
     last_message = state["messages"][-1].content if state["messages"] else ""
+    turn_count = state.get("turn_count", 0) + 1
+
+    logger.info("─── TURN %d ──────────────────────────────────────────────", turn_count)
+    logger.info("  Patient: %r", last_message[:120] + ("…" if len(last_message) > 120 else ""))
 
     # Step 1: PHI detection + de-identification
     de_identified, lookup, phi_found = detect_and_deidentify(last_message)
 
-    # Merge new lookup entries into existing table
     existing_lookup = state.get("phi_lookup_table") or {}
     merged_lookup = {**existing_lookup, **lookup}
+
+    if lookup:
+        logger.info("  PHI: %d token(s) replaced → %s", len(lookup), list(lookup.keys()))
+    else:
+        logger.info("  PHI: none detected")
 
     # Extract first name if found in this turn
     first_name = state.get("patient_first_name")
@@ -29,14 +37,22 @@ async def guardrail_node(state: TriageState) -> dict:
                 first_name = value.strip().split()[0]
                 break
 
-    # Step 2: Health relevance check (on de-identified message)
+    # Step 2: Health relevance check (logs inside is_health_related)
     health_related = is_health_related(de_identified)
 
-    # Step 3: Emergency detection (on de-identified message)
+    # Step 3: Emergency detection
     needs_escalation, escalation_signals = detect_escalation(de_identified)
+    if needs_escalation:
+        logger.info("  Emergency: ESCALATE — signals=%s", escalation_signals)
+    else:
+        logger.info("  Emergency: clear")
 
-    # Step 4: Diagnosis demand detection (on de-identified message)
+    # Step 4: Diagnosis demand detection
     is_diagnosis_demand, diagnosis_signal = detect_diagnosis_demand(de_identified)
+    if is_diagnosis_demand:
+        logger.info("  Diagnosis demand: BLOCKED — signal=%r", diagnosis_signal)
+    else:
+        logger.info("  Diagnosis demand: clear")
 
     updates: dict = {
         "de_identified_message": de_identified,
@@ -45,8 +61,7 @@ async def guardrail_node(state: TriageState) -> dict:
         "needs_escalation": needs_escalation,
         "escalation_signals": escalation_signals,
         "diagnosis_demand": is_diagnosis_demand,
-        "turn_count": state.get("turn_count", 0) + 1,
-        # Bug D fix: always reset block flag at the start of each turn
+        "turn_count": turn_count,
         "response_blocked": False,
         "block_reason": None,
     }
@@ -58,12 +73,16 @@ async def guardrail_node(state: TriageState) -> dict:
         updates["patient_response"] = BLOCK_NOT_HEALTH
         updates["response_blocked"] = True
         updates["block_reason"] = "not_health_related"
-        logger.info("Guardrail: blocked — not health related")
+        logger.info("  Route → BLOCKED (not health-related)")
     elif is_diagnosis_demand:
         updates["patient_response"] = BLOCK_DIAGNOSIS_DEMAND
         updates["response_blocked"] = True
         updates["block_reason"] = f"diagnosis_demand:{diagnosis_signal}"
-        logger.info("Guardrail: blocked — diagnosis demand (%s)", diagnosis_signal)
+        logger.info("  Route → BLOCKED (diagnosis demand)")
+    elif needs_escalation:
+        logger.info("  Route → EMERGENCY")
+    else:
+        logger.info("  Route → PASS")
 
     return updates
 

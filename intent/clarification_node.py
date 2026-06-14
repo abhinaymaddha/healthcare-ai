@@ -70,9 +70,20 @@ async def clarification_node(state: TriageState) -> dict:
     )
 
     if result.clarification_complete and result.intent_confirmed:
+        logger.info(
+            "  [CLARIFY] Complete — intent=%s form=%s",
+            result.intent_confirmed,
+            {k: v for k, v in form.items() if k != "original_message"},
+        )
         return _complete_routing(result.intent_confirmed, form, turns + 1)
 
     # Still collecting — send the next question to the patient
+    logger.info(
+        "  [CLARIFY] Turn %d — collected=%s | question: %r",
+        turns + 1,
+        {k: v for k, v in form.items() if k != "original_message" and v is not None},
+        (result.response or "")[:120],
+    )
     return {
         "patient_response": result.response,
         "clarification_pending": True,

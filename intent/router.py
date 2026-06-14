@@ -70,7 +70,7 @@ async def intent_router_node(state: TriageState) -> dict:
     gap           = top_score - second_score
 
     logger.info(
-        "NLI — %s=%.2f  %s=%.2f  %s=%.2f | gap=%.2f",
+        "  [INTENT] NLI scores — %s=%.2f  %s=%.2f  %s=%.2f | gap=%.2f",
         _NLI_LABELS[sorted_items[0][0]], sorted_items[0][1],
         _NLI_LABELS[sorted_items[1][0]], sorted_items[1][1],
         _NLI_LABELS[sorted_items[2][0]], sorted_items[2][1],
@@ -81,7 +81,10 @@ async def intent_router_node(state: TriageState) -> dict:
 
     # ── Very high confidence → direct route (skip Haiku) ─────────────────────
     if top_score >= _DIRECT_SCORE and gap >= _DIRECT_GAP:
-        logger.info("Direct route: %s (logit=%.2f gap=%.2f)", top_intent, top_score, gap)
+        logger.info(
+            "  [INTENT] Direct → %s (logit=%.2f, gap=%.2f, no Haiku needed)",
+            top_intent, top_score, gap,
+        )
         history.append(top_intent)
         return {
             "current_intent": top_intent,
@@ -96,16 +99,20 @@ async def intent_router_node(state: TriageState) -> dict:
         response = await client.complete(build_intent_request(message))
         result = IntentResult.parse(response.content)
         haiku_intent = result.intent
-        logger.info("Haiku confirm: %s (NLI top was %s)", haiku_intent, top_intent)
+        logger.info(
+            "  [INTENT] NLI top=%s → Haiku says %s",
+            top_intent, haiku_intent,
+        )
 
-        # Mixed-intent signal: NLI detected symptoms as the primary signal,
-        # but Haiku sees an explicit task request. The patient stated both.
-        # Ask clarifying questions before jumping to the task.
         if top_intent == "UC1" and haiku_intent != "UC1":
             detected = list(dict.fromkeys(["UC1", haiku_intent]))
-            logger.info("Clarification: symptom signal + task request | %s", detected)
+            logger.info(
+                "  [INTENT] Mixed signal (symptoms + task request) → CLARIFICATION | detected=%s",
+                detected,
+            )
             return _clarification_state(state, detected, history)
 
+        logger.info("  [INTENT] Haiku confirmed → routing to %s", haiku_intent)
         history.append(haiku_intent)
         return {
             "current_intent": haiku_intent,
@@ -117,7 +124,10 @@ async def intent_router_node(state: TriageState) -> dict:
     # ── Genuinely tied intents → clarification ────────────────────────────────
     else:
         detected = list(dict.fromkeys([top_intent, second_intent]))
-        logger.info("Clarification: tied intents (gap=%.2f) | %s", gap, detected)
+        logger.info(
+            "  [INTENT] Tied intents (gap=%.2f < %.2f) → CLARIFICATION | detected=%s",
+            gap, _HAIKU_GAP, detected,
+        )
         return _clarification_state(state, detected, history)
 
 
