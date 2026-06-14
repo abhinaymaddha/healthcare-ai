@@ -5,7 +5,8 @@ from models.state import TriageState
 from guardrail.phi_detector import detect_and_deidentify
 from guardrail.health_relevance import is_health_related
 from guardrail.emergency_detector import detect_escalation
-from prompts.guardrail import BLOCK_NOT_HEALTH
+from guardrail.diagnosis_detector import detect_diagnosis_demand
+from prompts.guardrail import BLOCK_NOT_HEALTH, BLOCK_DIAGNOSIS_DEMAND
 
 logger = logging.getLogger(__name__)
 
@@ -34,12 +35,16 @@ async def guardrail_node(state: TriageState) -> dict:
     # Step 3: Emergency detection (on de-identified message)
     needs_escalation, escalation_signals = detect_escalation(de_identified)
 
+    # Step 4: Diagnosis demand detection (on de-identified message)
+    is_diagnosis_demand, diagnosis_signal = detect_diagnosis_demand(de_identified)
+
     updates: dict = {
         "de_identified_message": de_identified,
         "phi_lookup_table": merged_lookup,
         "is_health_related": health_related,
         "needs_escalation": needs_escalation,
         "escalation_signals": escalation_signals,
+        "diagnosis_demand": is_diagnosis_demand,
         "turn_count": state.get("turn_count", 0) + 1,
         # Bug D fix: always reset block flag at the start of each turn
         "response_blocked": False,
@@ -54,6 +59,11 @@ async def guardrail_node(state: TriageState) -> dict:
         updates["response_blocked"] = True
         updates["block_reason"] = "not_health_related"
         logger.info("Guardrail: blocked — not health related")
+    elif is_diagnosis_demand:
+        updates["patient_response"] = BLOCK_DIAGNOSIS_DEMAND
+        updates["response_blocked"] = True
+        updates["block_reason"] = f"diagnosis_demand:{diagnosis_signal}"
+        logger.info("Guardrail: blocked — diagnosis demand (%s)", diagnosis_signal)
 
     return updates
 

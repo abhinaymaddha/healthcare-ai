@@ -22,6 +22,7 @@ class TriageState(TypedDict):
     is_health_related: bool
     needs_escalation: bool
     escalation_signals: list
+    diagnosis_demand: bool              # patient is pushing for a specific diagnosis
 
     # UC1 — Symptom Check
     chief_complaint: Optional[str]

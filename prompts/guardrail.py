@@ -6,6 +6,22 @@ Edit here to change what the patient sees for blocks and emergencies.
 
 # ── Health relevance block ────────────────────────────────────────────────────
 
+# ── Diagnosis demand block ────────────────────────────────────────────────────
+
+BLOCK_DIAGNOSIS_DEMAND = (
+    "I'm not able to tell you what condition you have — making a diagnosis "
+    "requires a licensed healthcare provider who can examine you, review your "
+    "full medical history, and run any necessary tests.\n\n"
+    "What I can do is help you understand how serious your symptoms seem and "
+    "guide you to the right level of care. If you share what you're "
+    "experiencing, I'll give you an honest assessment of urgency and "
+    "recommend a clear next step.\n\n"
+    "This is not a medical diagnosis. "
+    "Please consult a licensed healthcare provider for personalised medical advice."
+)
+
+# ── Health relevance block ────────────────────────────────────────────────────
+
 BLOCK_NOT_HEALTH = (
     "I'm here to help with health and medical questions. "
     "Your message doesn't appear to be health-related. "

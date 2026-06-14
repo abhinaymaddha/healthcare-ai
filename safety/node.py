@@ -9,9 +9,16 @@ from prompts.safety import DISCLAIMER, SAFE_FALLBACK
 logger = logging.getLogger(__name__)
 
 DIAGNOSIS_PATTERNS = [
-    re.compile(r"\byou\s+have\b.{0,50}\b(disease|condition|disorder|syndrome|infection|virus|cancer|diabetes)\b", re.IGNORECASE),
-    re.compile(r"\bthis is (definitely|clearly|obviously)\b", re.IGNORECASE),
-    re.compile(r"\byou('re| are) (suffering from|diagnosed with)\b", re.IGNORECASE),
+    # "you have [condition]" — exclude "you have been" (past-perfect, not diagnostic)
+    re.compile(r"\byou\s+(likely |probably |definitely |clearly |obviously )?(have|have got)\b(?!\s+been\b)", re.IGNORECASE),
+    # "this sounds/looks/appears/seems like [X]" or "appears to be [X]"
+    re.compile(r"\bthis (sounds|looks|appears|seems) (like|to be)\b", re.IGNORECASE),
+    # "this could be / might be / is [X]" in a diagnostic assertion context
+    re.compile(r"\bthis (could be|might be|is (likely|probably|definitely|clearly))\b", re.IGNORECASE),
+    # Explicit diagnosis language
+    re.compile(r"\byou('re| are) (suffering from|diagnosed with|presenting with)\b", re.IGNORECASE),
+    re.compile(r"\b(the |your )?(diagnosis|condition) is\b", re.IGNORECASE),
+    re.compile(r"\bI (would |can )?(diagnose|conclude)\b", re.IGNORECASE),
 ]
 
 PRESCRIPTION_PATTERNS = [
