@@ -38,7 +38,7 @@ This document covers the technical details: how data is stored and processed, ho
 │  Session state      │◄─────►│                                      │
 │  (RedisSaver        │       │   LangGraph CompiledGraph             │
 │   checkpointer)     │       │   • MemorySaver → RedisSaver         │
-│                     │       │   • All 11 nodes                     │
+│                     │       │   • All 13 nodes                     │
 │  Rate limiting      │       │   • 3 UC subgraphs                   │
 │  (per session_id,   │       │   • Resume router pattern            │
 │   per IP)           │       │   • HITL interrupt                   │
@@ -328,61 +328,56 @@ START
   │
   ▼
 ┌────────────┐
-│  guardrail │  ← runs every turn
-└─────┬──────┘
+│  guardrail │  ← runs every turn; PHI, health-relevance,
+└─────┬──────┘   emergency, diagnosis-demand detection
       │
-  ┌───┴──────────────────┐
-  │                      │
-blocked             escalation          pass
-  │                      │               │
-  │              ┌───────▼──────┐        │
-  │              │  emergency   │        │
-  │              └───────┬──────┘        │
-  │                      │               │
-  └──────────────────────┼───────────────┘
-                         │
-                  ┌──────▼──────┐
-                  │ response_   │  ◄── blocked / emergency paths end here
-                  │ formatter   │
-                  └──────┬──────┘
-                         │
-    ╔════════════════════╪══════════════════════════════╗
-    ║        (pass path continues from guardrail)       ║
-    ╚════════════════════╪══════════════════════════════╝
-                         ▼
-                ┌──────────────────┐
-                │  intent_router   │
-                └────────┬─────────┘
-                         │
-           ┌─────────────┼─────────────┐
-          UC1            UC2           UC3
-           │              │             │
-    ┌──────▼──────┐ ┌─────▼──────┐ ┌───▼────────┐
-    │ uc1 sub-    │ │ uc2 sub-   │ │ uc3 sub-   │
-    │ graph       │ │ graph      │ │ graph      │
-    └──────┬──────┘ └─────┬──────┘ └───┬────────┘
-           │              │             │
-    route_after_uc1  route_after_uc2    │
-           │              │             │
-      ┌────┴─────┐   ┌────┴─────┐       │
-  summarize  compliance  summarize  compliance
-    uc1           │   uc2           │
-      │           │     │           │
-      └───────► [uc3]   │           │
-                  │     │           │
-                  │     └───────────┘
-                  │
-           ┌──────▼──────────┐
-           │ safety_          │
-           │ compliance       │
-           └──────┬──────────┘
-                  │
-           ┌──────▼──────────┐
-           │ response_        │
-           │ formatter        │
-           └──────┬──────────┘
-                  │
-                 END
+  ┌───┴──────────────────────────┐
+  │              │               │
+blocked    escalation           pass
+(non-health   │                  │
+ or diagnosis │         ┌────────▼──────────┐
+ demand)      │         │   intent_router   │
+  │    ┌──────▼──────┐  └────────┬──────────┘
+  │    │  emergency  │           │
+  │    └──────┬──────┘   ┌───────┴──────────────────┐
+  │           │          │           │               │
+  │           │    clarification    UC1             UC2 / UC3
+  │           │          │           │               │
+  │           │   ┌──────▼──────┐   │               │
+  │           │   │clarification│   │               │
+  │           │   │   node      │   │               │
+  │           │   └──────┬──────┘   │               │
+  │           │          │          │               │
+  │           │    ┌─────┴──────┐   │               │
+  │           │  question     route │               │
+  │           │    │       (back to │               │
+  │           │    │    intent_     │               │
+  │           │    │    router)     │               │
+  │           │    │               │               │
+  └───────────┼────┤        ┌──────▼──────┐ ┌──────▼──────┐
+              │    │        │ uc1 sub-    │ │ uc2 / uc3   │
+              │    │        │ graph       │ │ subgraphs   │
+              │    │        └──────┬──────┘ └──────┬──────┘
+              │    │         route_after_uc1  route_after_uc2
+              │    │               │               │
+              │    │        ┌──────┴──┐     ┌──────┴──┐
+              │    │    summarize  comply summarize comply
+              │    │        │             │
+              │    │        └──► [uc3] ◄──┘
+              │    │                │
+              │    │         ┌──────▼──────────┐
+              │    │         │ safety_          │
+              │    │         │ compliance       │
+              │    │         └──────┬──────────┘
+              │    │                │
+              └────┴────────────────┤
+                                    ▼
+                             ┌──────────────┐
+                             │  response_   │
+                             │  formatter   │
+                             └──────┬───────┘
+                                    │
+                                   END
 ```
 
 ---
@@ -414,8 +409,15 @@ class TriageState(TypedDict):
     is_health_related: bool
     needs_escalation: bool
     escalation_signals: list
+    diagnosis_demand: bool              # patient is pushing for a specific diagnosis
     awaiting_911_confirmation: bool
     hitl_triggered: bool
+
+    # Clarification / intake form
+    clarification_pending: bool         # True while asking clarifying questions
+    detected_intents: list              # NLI top-2 intents with meaningful scores
+    clarification_form: dict            # structured data collected so far
+    clarification_turns: int            # safety valve — max 3 turns before forced routing
 
     # UC1 — Symptom Check
     chief_complaint: Optional[str]
@@ -472,10 +474,11 @@ Runs on every turn before any UC processing.
 7. DeBERTa NLI: classify de-identified message as health-related (threshold ≥ 0.5)
 8. Keyword scan for hard escalation signals
 9. DeBERTa NLI: soft escalation check if no hard signals
-10. **Always** reset `response_blocked = False` at start (prevents stale state across turns)
-11. Set `response_blocked = True` only if not health-related
+10. **Diagnosis demand detection:** keyword fast-pass (26 terms: "diagnose me", "is it pneumonia", "do you think it is", "skip the disclaimers", etc.) + DeBERTa NLI soft check at threshold 0.75
+11. **Always** reset `response_blocked = False` at start (prevents stale state across turns)
+12. Set `response_blocked = True` if not health-related; separately if diagnosis demand detected, set `response_blocked = True` with `block_reason = "diagnosis_demand"` and `patient_response = BLOCK_DIAGNOSIS_DEMAND` (a fixed empathetic message that explains the limitation and offers to assess urgency)
 
-**Routing:** `route_after_guardrail(state)` returns `"blocked"` | `"escalation"` | `"pass"`. Checks `awaiting_911_confirmation` first so turn 2 of an emergency conversation routes back to the emergency node regardless of message content.
+**Routing:** `route_after_guardrail(state)` returns `"blocked"` | `"escalation"` | `"pass"`. Priority: `awaiting_911_confirmation` → `escalation`; `response_blocked` → `"blocked"`; `needs_escalation` → `"escalation"`; otherwise `"pass"`.
 
 ---
 
@@ -494,13 +497,40 @@ The `awaiting_911_confirmation` flag ensures turn 2 routes back to the emergency
 ---
 
 #### `intent_router_node`
-Classifies or continues the active use case.
+Classifies or continues the active use case using multi-score gap analysis.
 
 **Priority order:**
-1. If `current_intent` is set and the UC is not complete → stay in current UC (no LLM call)
-2. If `pending_intent` is set (queued transition, e.g. UC2 → UC3) → switch to pending
-3. Otherwise → classify with DeBERTa NLI (three UC description labels)
-4. If NLI confidence < 0.55 → Haiku fallback classification (1 LLM call, structured JSON output)
+1. If `clarification_pending` → return no-op; `route_intent` sends to clarification node
+2. If `current_intent` is set and the UC is not complete → stay in current UC (no LLM call)
+3. If `pending_intent` is set (queued transition, e.g. UC2 → UC3) → switch to pending
+4. Otherwise → score all three UC labels simultaneously with DeBERTa NLI (`all_scores()`)
+
+**Routing decision (based on raw logit gap, not absolute score):**
+
+| Condition | Action |
+|---|---|
+| Top logit ≥ 1.2 AND gap ≥ 1.0 | Direct route — very high confidence single intent |
+| Gap ≥ 0.15 | Haiku confirms intent (1 LLM call). If NLI top was UC1 but Haiku says UC2/UC3, patient stated symptoms alongside a task request → route to `clarification` |
+| Gap < 0.15 | Genuinely tied intents → route to `clarification` |
+
+The gap-based approach is necessary because DeBERTa NLI entailment logits for this task are raw (not softmax probabilities) and can be negative. Absolute score thresholds are unreliable; the gap between top-2 labels is the meaningful signal.
+
+#### `clarification_node`
+Iterative intake form — asks one focused question per turn until intent is confirmed and enough clinical detail is collected.
+
+**On each turn:**
+1. Builds conversation context from the last 8 messages
+2. Calls Haiku with a structured prompt: extract any new information from the patient's answer, determine if clarification is complete, generate the next question
+3. Updates `clarification_form` with extracted fields (primary_concern, severity, duration, onset, emergency_signs)
+4. If `clarification_complete = True` and intent is confirmed:
+   - For UC1: sets `de_identified_message` to a synthesized symptom description from the form, so UC1 has full context
+   - For UC2/UC3: restores `de_identified_message` to the original patient message (so medication extraction and booking still work correctly)
+   - Clears `clarification_pending`; routes back to `intent_router` which dispatches to the UC
+5. If still collecting: sets `patient_response` to the next question; routes to `response_formatter`
+
+**Question priority (in order):** emergency signs → severity → duration → primary need
+
+**Safety valve:** after 3 clarification turns without resolution, defaults to UC1 (always the clinically conservative choice) and exits the loop.
 
 ---
 
@@ -579,7 +609,8 @@ no preferences yet                             → collect_preferences_node → 
 
 5. intent_router_node
    ├── No current_intent set
-   ├── DeBERTa NLI: "symptom check or health concern" → 0.87 confidence → UC1
+   ├── all_scores(): UC1 logit high with large gap → Haiku confirms UC1
+   ├── Haiku agrees → no clarification triggered
    └── State: current_intent = "UC1"
 
 6. uc1 subgraph → symptom_check_node
@@ -601,6 +632,51 @@ no preferences yet                             → collect_preferences_node → 
 10. FastAPI returns:
     { response: "...", intent: "UC1", acuity: "Medium", escalated: false,
       llm_calls: 1, estimated_cost_usd: 0.0015, latency_ms: 1842 }
+```
+
+#### Mixed-intent clarification: "high blood pressure, haven't taken meds, headache"
+
+```
+Turn 1 (mixed signal)
+─────────────────────────────────────────────
+guardrail → pass (no PHI, no emergency keyword match)
+intent_router:
+  all_scores(): UC1 logit = 0.31, UC2 logit = 0.21 → gap = 0.10 < 0.15?  No, let's say 0.24
+  Actually: NLI top = UC1 (symptoms detected), gap = 0.24 ≥ 0.15 → Haiku confirm
+  Haiku: "UC2" (patient explicitly mentioned running out of medication)
+  top_intent=UC1 and haiku_intent=UC2 → mixed-intent detected
+  → clarification_pending=True, detected_intents=["UC1","UC2"]
+
+clarification_node (turn 1):
+  form["original_message"] = patient's full message (saved on first entry)
+  Haiku call: extract what's known, generate first question
+    extracted: { primary_concern: "high blood pressure + headache", emergency_signs: null }
+    clarification_complete: False
+    response: "I want to make sure we address the most urgent concern first. Are you
+               experiencing any chest tightness, shortness of breath, vision changes,
+               or weakness in your arm?"
+  → patient_response = question, clarification_pending=True, turns=1
+
+response_formatter → FastAPI returns question to patient
+
+Turn 2 (patient answers)
+─────────────────────────────────────────────
+Patient: "No, none of those. Just the headache and I ran out of metformin 2 days ago."
+guardrail → pass
+intent_router: clarification_pending=True → no-op → route_intent → "clarification"
+
+clarification_node (turn 2):
+  Haiku call:
+    extracted: { emergency_signs: false, duration: "2 days", primary_concern: "hypertension" }
+    intent_confirmed: "UC2"
+    clarification_complete: True
+    response: null
+  → _complete_routing("UC2", form, 2)
+  de_identified_message = form["original_message"]  # restored for medication extraction
+  clarification_pending=False
+
+intent_router: clarification_pending=False → route_intent → "UC2"
+uc2 → extract_medications_node → ... → confirmation → check_prescription
 ```
 
 #### UC2 multi-turn: prescription refill (2 turns)

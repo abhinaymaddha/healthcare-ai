@@ -71,9 +71,12 @@ Every AI-generated response passes through a deterministic compliance check befo
 | Rule | How it works |
 |---|---|
 | Mandatory disclaimer | All symptom responses must end with: *"This is not a medical diagnosis. Please consult a licensed healthcare provider for personalised medical advice."* If missing, it is appended automatically. |
-| No diagnosis language | Phrases such as "you have [condition]", "you are diagnosed with", "this is clearly", "you are suffering from" are detected by regular expression and cause the response to be replaced with a safe fallback. |
+| No diagnosis language | A pattern set covering declarative assertions ("you have [condition]", "this sounds like [X]", "this appears to be", "you are presenting with") is scanned on every response. Any match discards the response and returns a safe fallback. |
 | No prescription advice | Phrases such as "take 500mg", "I prescribe", "increase your dose", "stop taking" are detected and trigger the same replacement. |
 | No brand-to-generic substitution | Medications are always extracted as stated by the patient. We do not silently rename a brand name to a generic — that is a clinical and formulary decision requiring authorisation. |
+| Diagnosis demand blocked at input | If a patient pushes for a specific diagnosis ("diagnose me", "is it pneumonia", "do you think it is COVID", "skip the disclaimers"), the request is intercepted before the AI model is called. A fixed empathetic response explains what the system can and cannot do, and offers to assess urgency instead. |
+| Jailbreak and bypass attempts blocked | The AI system prompt contains an unconditional rule: safety boundaries apply regardless of whether the patient claims to be a clinician, grants permission, or frames the request as fictional, hypothetical, or a role-play scenario. |
+| Clarification before commitment | When a patient message contains both symptom signals and an explicit task request (e.g., "I ran out of my blood pressure medication and I have a headache"), the system does not immediately jump to the task. It asks one focused clarifying question per turn — checking for emergency signs first — before routing to any workflow. |
 
 The AI prompts are separately engineered to prevent these violations. The compliance layer is an independent safety net that holds even if a prompt fails on an edge case.
 
