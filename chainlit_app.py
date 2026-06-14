@@ -58,10 +58,14 @@ async def on_message(message: cl.Message):
     # Main response
     await cl.Message(content=response_text).send()
 
-    # Debug panel (collapsed)
+    # Debug panel
     debug_lines = [f"**Intent:** {intent or 'N/A'}"]
     if acuity:
         debug_lines.append(f"**Acuity:** {acuity}")
+    if escalated:
+        debug_lines.append("**Escalated:** YES")
+    if data.get("blocked"):
+        debug_lines.append(f"**Blocked:** YES")
     debug_lines.append(f"**Latency:** {latency}ms")
     debug_lines.append(f"**Est. cost:** ${cost:.6f}")
     debug_lines.append(f"**LLM calls:** {data.get('llm_calls', 0)}")

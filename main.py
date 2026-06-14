@@ -132,12 +132,22 @@ async def triage(request: TriageRequest) -> TriageResponse:
     result = await _graph.ainvoke(input_data, config=config)
 
     latency_ms = int((time.time() - t0) * 1000)
+    escalated = result.get("needs_escalation", False)
+    clarification_pending = result.get("clarification_pending", False)
+
+    if escalated:
+        intent_label = "EMERGENCY"
+    elif clarification_pending:
+        intent_label = "CLARIFYING"
+    else:
+        intent_label = result.get("current_intent")
+
     return TriageResponse(
         response=result.get("patient_response") or "I'm sorry, something went wrong. Please try again.",
         session_id=request.session_id,
-        intent=result.get("current_intent"),
+        intent=intent_label,
         acuity=result.get("acuity"),
-        escalated=result.get("needs_escalation", False),
+        escalated=escalated,
         blocked=result.get("response_blocked", False),
         latency_ms=latency_ms,
         estimated_cost_usd=round(result.get("total_cost_usd", 0.0), 6),
