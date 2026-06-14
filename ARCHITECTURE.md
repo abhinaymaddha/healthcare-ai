@@ -31,23 +31,29 @@ A multi-agent, multi-turn **Patient Symptom Triage Concierge** for telehealth. A
 ## Architecture documents
 
 ### [HIGH_LEVEL_ARCHITECTURE.md](HIGH_LEVEL_ARCHITECTURE.md)
-The production system design — services, infrastructure, and data stores:
-- Patient-facing API gateway and load balancing
-- Horizontally scaled FastAPI + LangGraph worker pool
-- PostgreSQL for audit logs, patient records, PHI lookup tables, prescription and appointment data
-- Redis for session state, LangGraph checkpointing, rate limiting, and inference caching
-- Dedicated local model servers (DeBERTa NLI, spaCy)
-- HITL (Human-In-The-Loop) reviewer dashboard for emergency escalations
-- Monitoring and alerting
+Business and compliance overview — written for clinical leadership, compliance officers, and client stakeholders:
+- What each patient workflow does and what outcomes it produces
+- How patient privacy is protected (PHI de-identification, conceptual)
+- How emergency situations are detected and escalated
+- What the compliance layer enforces and why
+- Security controls in plain language
+- Cost model and recommended pilot approach
+- Explicit list of what the system does not do
 
 ### [LOW_LEVEL_ARCHITECTURE.md](LOW_LEVEL_ARCHITECTURE.md)
-The current implementation and data flow:
-- LangGraph graph structure (11 nodes, 3 UC subgraphs, resume router pattern)
-- Full turn-by-turn data flow for each use case
-- TriageState schema and how it evolves across turns
-- PHI de-identification pipeline
-- LLM abstraction layer internals
-- Evolution path from demo to production
+Infrastructure, data, and implementation reference — written for engineers and technical reviewers:
+- Production infrastructure diagram: API gateway, FastAPI cluster, LangGraph workers, ML servers, Redis, PostgreSQL
+- PostgreSQL table schemas (patient_sessions, audit_log, phi_lookup_table, prescriptions, appointments, escalation_log)
+- Redis key patterns: LangGraph checkpointing, rate limiting, inference cache, HITL queue
+- Service responsibilities and scalability model
+- HIPAA technical controls and monitoring metrics
+- LangGraph graph structure (11 nodes, 3 UC subgraphs, routing logic)
+- TriageState schema (all 39 fields with annotations)
+- Node-by-node responsibilities and UC2/UC3 state machines
+- Turn-by-turn data flow traces with actual state changes
+- PHI de-identification pipeline and re-identification rules
+- LLM abstraction layer and session lifecycle
+- Evolution table: demo vs. production for every component
 
 ---
 

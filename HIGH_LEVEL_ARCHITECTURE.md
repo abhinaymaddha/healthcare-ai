@@ -1,349 +1,141 @@
-# High-Level Architecture — Production System Design
+# High-Level Architecture — Healthcare AI Patient Triage Concierge
 
-This document describes what the Healthcare AI Triage Concierge looks like at production scale. The demo (see [LOW_LEVEL_ARCHITECTURE.md](LOW_LEVEL_ARCHITECTURE.md)) implements the full conversation logic but uses in-memory state and mock tools. This document defines the infrastructure required to make the system production-ready, HIPAA-compliant, and horizontally scalable.
-
----
-
-## Production system overview
-
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                          Patient Clients                             │
-│         Chainlit Web UI  │  Mobile App  │  EHR/EMR Integration      │
-└─────────────────────────┬───────────────────────────────────────────┘
-                          │ HTTPS
-                          ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                     API Gateway / Load Balancer                      │
-│         Auth (JWT/OAuth)  │  Rate limiting  │  TLS termination       │
-│         WAF (block SQLi, XSS, prompt injection headers)              │
-└─────────────────────────┬───────────────────────────────────────────┘
-                          │
-                          ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                    FastAPI Service Cluster                            │
-│              (horizontally scaled, stateless HTTP layer)             │
-│                                                                      │
-│   POST /triage ──► graph.ainvoke(message, thread_id=session_id)     │
-│   GET  /health                                                       │
-│   GET  /session/{id}/history                                        │
-└──────────┬──────────────────────────────────────────────────────────┘
-           │                              │
-           ▼                              ▼
-┌─────────────────────┐       ┌──────────────────────────────────────┐
-│   Redis Cluster     │       │       LangGraph Worker Pool           │
-│                     │       │   (separate async worker processes)   │
-│  Session state      │◄─────►│                                      │
-│  (RedisSaver        │       │   LangGraph CompiledGraph             │
-│   checkpointer)     │       │   • MemorySaver → RedisSaver         │
-│                     │       │   • All 11 nodes                     │
-│  Rate limiting      │       │   • 3 UC subgraphs                   │
-│  (per session_id,   │       │   • Resume router pattern            │
-│   per IP)           │       │   • HITL interrupt                   │
-│                     │       └──────────────┬───────────────────────┘
-│  Inference cache    │                      │
-│  (common symptom    │            ┌─────────┼──────────┐
-│   response cache)   │            │         │          │
-└─────────────────────┘            ▼         ▼          ▼
-                         ┌──────────────┐  ┌──────┐  ┌──────────────┐
-                         │ Local ML     │  │ LLM  │  │  Tool Layer  │
-                         │ Servers      │  │ Gate-│  │ (Real APIs)  │
-                         │              │  │ way  │  │              │
-                         │ DeBERTa NLI  │  │      │  │ Patient DB   │
-                         │ (health rel, │  │ Open-│  │ Prescription │
-                         │  emergency,  │  │Router│  │   System     │
-                         │  intent)     │  │  ↓   │  │ Appointment  │
-                         │              │  │Haiku │  │   Booking    │
-                         │ spaCy NER    │  │ 4.5  │  │ Emergency    │
-                         │ (PHI detect) │  │      │  │   Dispatch   │
-                         └──────────────┘  └──────┘  └──────┬───────┘
-                                                             │
-                                                             ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                      PostgreSQL Database                             │
-│                                                                      │
-│  patient_sessions   │  audit_log        │  phi_lookup_table         │
-│  phi_events         │  escalation_log   │  prescriptions            │
-│  appointments       │  eval_runs        │  eval_results             │
-└─────────────────────────────────────────────────────────────────────┘
-                                   │
-                    ┌──────────────┼──────────────┐
-                    ▼              ▼               ▼
-          ┌──────────────┐  ┌──────────┐  ┌──────────────┐
-          │ HITL         │  │ Monitor- │  │ Compliance   │
-          │ Reviewer     │  │ ing      │  │ Reporting    │
-          │ Dashboard    │  │ Stack    │  │ Dashboard    │
-          │              │  │          │  │              │
-          │ Emergency    │  │Prometheus│  │ PHI access   │
-          │ case review  │  │ Grafana  │  │ Audit logs   │
-          │ Escalation   │  │ Alerts   │  │ Violation    │
-          │ override     │  │          │  │ history      │
-          └──────────────┘  └──────────┘  └──────────────┘
-```
+This document describes what the system does, how it protects patients, and how it ensures safe and compliant responses — written for a clinical, compliance, or business audience. For infrastructure specifications, data schemas, and implementation details, see [LOW_LEVEL_ARCHITECTURE.md](LOW_LEVEL_ARCHITECTURE.md).
 
 ---
 
-## Data stores
+## What the system does
 
-### PostgreSQL — persistent storage
+The Healthcare AI Patient Triage Concierge is a conversational AI that manages the first turn of a patient interaction in a telehealth platform. A patient sends a message in plain language; the system identifies the need, applies privacy and safety controls, and returns a safe, empathetic, clinically appropriate response — across a persistent multi-turn conversation that retains full context between messages.
 
-PostgreSQL is the system of record for everything that must survive restarts, be audited, or be queried across sessions.
+**Three patient workflows are supported end-to-end:**
 
-#### `patient_sessions`
-Tracks conversation sessions and their outcome.
-
-```sql
-CREATE TABLE patient_sessions (
-    session_id          UUID PRIMARY KEY,
-    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    patient_id          VARCHAR(64),                    -- hashed patient identifier
-    intents_visited     TEXT[],                         -- ["UC1", "UC2", "UC3"]
-    final_intent        VARCHAR(8),
-    acuity              VARCHAR(8),                     -- 'Low' | 'Medium' | 'High'
-    escalated           BOOLEAN DEFAULT FALSE,
-    uc1_complete        BOOLEAN DEFAULT FALSE,
-    uc2_complete        BOOLEAN DEFAULT FALSE,
-    uc3_complete        BOOLEAN DEFAULT FALSE,
-    total_turns         INTEGER DEFAULT 0,
-    total_cost_usd      NUMERIC(10, 6) DEFAULT 0,
-    total_llm_calls     INTEGER DEFAULT 0
-);
-```
-
-#### `audit_log`
-Immutable log of every conversation turn. HIPAA requires this.
-
-```sql
-CREATE TABLE audit_log (
-    id                  BIGSERIAL PRIMARY KEY,
-    session_id          UUID REFERENCES patient_sessions(session_id),
-    turn_number         INTEGER NOT NULL,
-    timestamp           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    -- PHI never stored here; de-identified message only
-    de_identified_input TEXT NOT NULL,
-    de_identified_output TEXT NOT NULL,
-    intent              VARCHAR(8),
-    acuity              VARCHAR(8),
-    escalated           BOOLEAN,
-    llm_calls           INTEGER,
-    cost_usd            NUMERIC(10, 6),
-    latency_ms          INTEGER,
-    node_path           TEXT[]                          -- which nodes executed this turn
-);
-```
-
-#### `phi_lookup_table`
-Stores the de-identification mapping per session. Encrypted at rest. TTL-controlled.
-
-```sql
-CREATE TABLE phi_lookup_table (
-    session_id          UUID REFERENCES patient_sessions(session_id),
-    token               VARCHAR(64) NOT NULL,           -- "[PERSON_a3f7]"
-    encrypted_value     BYTEA NOT NULL,                 -- AES-256 encrypted original
-    phi_type            VARCHAR(32) NOT NULL,           -- "PERSON", "SSN", "MRN", etc.
-    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    expires_at          TIMESTAMPTZ NOT NULL,           -- session TTL
-    PRIMARY KEY (session_id, token)
-);
-```
-
-#### `phi_events`
-Tracks every PHI detection event for compliance reporting.
-
-```sql
-CREATE TABLE phi_events (
-    id                  BIGSERIAL PRIMARY KEY,
-    session_id          UUID REFERENCES patient_sessions(session_id),
-    turn_number         INTEGER,
-    timestamp           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    phi_types_detected  TEXT[],                         -- ["SSN", "PERSON"]
-    token_count         INTEGER
-    -- Never stores actual PHI values
-);
-```
-
-#### `escalation_log`
-Tracks all emergency escalations and HITL decisions.
-
-```sql
-CREATE TABLE escalation_log (
-    id                  BIGSERIAL PRIMARY KEY,
-    session_id          UUID REFERENCES patient_sessions(session_id),
-    timestamp           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    escalation_type     VARCHAR(32),                    -- "keyword" | "nli_soft" | "both"
-    signals             TEXT[],                         -- which signals triggered it
-    dispatch_requested  BOOLEAN,
-    dispatch_confirmed  BOOLEAN,
-    hitl_triggered      BOOLEAN DEFAULT FALSE,
-    hitl_reviewer_id    VARCHAR(64),
-    hitl_resolution     VARCHAR(32),                    -- "dispatched" | "declined" | "monitoring"
-    resolved_at         TIMESTAMPTZ
-);
-```
-
-#### `prescriptions` and `appointments`
-Production replacements for the mock tools.
-
-```sql
-CREATE TABLE prescriptions (
-    id                  BIGSERIAL PRIMARY KEY,
-    patient_id          VARCHAR(64) NOT NULL,
-    medication_name     VARCHAR(128) NOT NULL,
-    dosage              VARCHAR(64),
-    prescribing_doctor  VARCHAR(64),
-    issued_date         DATE,
-    valid_through       DATE,
-    refills_remaining   INTEGER DEFAULT 0
-);
-
-CREATE TABLE appointments (
-    id                  BIGSERIAL PRIMARY KEY,
-    appointment_id      UUID DEFAULT gen_random_uuid(),
-    patient_id          VARCHAR(64) NOT NULL,
-    doctor_id           VARCHAR(64) NOT NULL,
-    scheduled_at        TIMESTAMPTZ NOT NULL,
-    visit_mode          VARCHAR(16),                    -- "in_person" | "telehealth"
-    reason              TEXT,
-    status              VARCHAR(16) DEFAULT 'scheduled',
-    created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-```
-
----
-
-### Redis — ephemeral state and performance
-
-Redis handles everything that is high-frequency, time-bounded, or needs sub-millisecond access.
-
-#### LangGraph session state (RedisSaver)
-The primary use of Redis. LangGraph's `RedisSaver` checkpointer stores the full `TriageState` snapshot after every graph invocation.
-
-```
-Key pattern:  langgraph:checkpoint:{thread_id}:{checkpoint_id}
-TTL:          24 hours (configurable per deployment)
-Serialization: MessagePack (LangGraph default)
-```
-
-When a patient sends turn 2, the graph reads the checkpoint, restores full state, and continues the conversation exactly where it left off — even if the request hits a different FastAPI instance.
-
-#### Rate limiting
-```
-Key pattern:  ratelimit:session:{session_id}   → counter, TTL 60s
-              ratelimit:ip:{client_ip}          → counter, TTL 60s
-Limits:       10 requests/minute per session
-              30 requests/minute per IP
-```
-
-#### Inference caching (optional)
-For common symptom messages, cache the de-identified response to avoid redundant LLM calls.
-```
-Key pattern:  inference:cache:{hash_of_deidentified_message}
-TTL:          1 hour
-Value:        { response, intent, acuity, cost_usd }
-```
-
-#### HITL notification queue
-```
-Key pattern:  hitl:queue        → Redis List (LPUSH / BRPOP)
-Value:        { session_id, transcript_excerpt, timestamp }
-Consumer:     HITL reviewer service (long-polls the list)
-```
-
----
-
-## Service breakdown
-
-### FastAPI Service (stateless HTTP layer)
-- Validates request schema (Pydantic)
-- Resolves session state via Redis (does the session already exist?)
-- Dispatches to LangGraph worker pool
-- Returns structured JSON response
-- Horizontally scalable; no local state
-
-### LangGraph Worker Pool
-- Executes the compiled graph for one turn
-- Reads/writes checkpoint via RedisSaver
-- Calls local ML servers for NLI/NER inference
-- Calls LLM gateway for Haiku completions
-- Calls tool layer (real DBs in production, mocks in demo)
-- Can be scaled independently of the HTTP layer
-
-### Local ML Servers
-- Serve DeBERTa NLI (`cross-encoder/nli-deberta-v3-xsmall`) via REST or gRPC
-- Serve spaCy NER pipeline (`en_core_web_md`)
-- GPU-backed in production for lower latency; CPU is sufficient for current load
-- Separate from worker pool to allow independent scaling
-
-### LLM Gateway (OpenRouter)
-- Routes to `anthropic/claude-haiku-4-5`
-- Adds retry logic, fallback routing, and spend tracking
-- Enables zero-code model swaps (change config, not code)
-
-### HITL Reviewer Dashboard
-- Web UI for human reviewers to see emergency sessions
-- Receives alerts from the Redis HITL queue
-- Allows reviewers to approve emergency dispatch, mark cases as resolved, or escalate to a clinician
-- All reviewer actions written to `escalation_log`
-
----
-
-## HIPAA compliance design
-
-| Requirement | Implementation |
-|---|---|
-| PHI never sent to LLM | De-identification before every LLM call; only hashed tokens sent |
-| PHI at rest encrypted | AES-256 encryption on `phi_lookup_table.encrypted_value` |
-| PHI in transit encrypted | TLS everywhere; no HTTP |
-| Audit trail | Immutable `audit_log` table; de-identified inputs/outputs only |
-| Access control | Role-based access on PostgreSQL; reviewers only see escalation data |
-| Data retention | PHI lookup TTL = 24h; audit logs retained per compliance policy |
-| Breach detection | Prometheus alert on unexpected PHI event volume spikes |
-
----
-
-## Monitoring and alerting
-
-### Key metrics (Prometheus)
-
-| Metric | Alert threshold |
-|---|---|
-| `escalation_miss_rate` | Alert if > 0 in 1h window (requires labeled validation set) |
-| `phi_deidentification_latency_p95` | Alert if > 200ms |
-| `llm_call_error_rate` | Alert if > 5% in 5m window |
-| `session_state_read_latency_p99` | Alert if > 50ms (Redis health) |
-| `avg_cost_per_request` | Alert if > $0.005 (model regression or misuse) |
-| `hitl_queue_depth` | Alert if > 10 (backlog of unreviewed emergencies) |
-
-### Dashboards (Grafana)
-- **Operations:** request volume, latency P50/P95/P99, error rates, cost per hour
-- **Safety:** escalation events per hour, HITL queue depth, resolution time
-- **Compliance:** PHI detection rate, disclaimer presence rate, violation count
-
----
-
-## Scalability model
-
-| Load | Instances |
-|---|---|
-| < 100 req/min | 2 FastAPI pods, 2 LangGraph workers, 1 Redis node, 1 Postgres |
-| 100–1000 req/min | 4 FastAPI pods, 4 LangGraph workers, Redis Cluster (3 shards) |
-| > 1000 req/min | Auto-scale FastAPI + workers; ML servers on GPU; Postgres read replicas |
-
-LangGraph workers are the bottleneck at high load — each invocation blocks for ~500ms–3000ms waiting on the Haiku API call. Horizontal scaling (more workers) is the primary lever.
-
----
-
-## Evolution from demo to production
-
-| Component | Demo | Production |
+| Workflow | Patient intent | System outcome |
 |---|---|---|
-| Session state | MemorySaver (in-process dict) | RedisSaver (Redis Cluster) |
-| PHI lookup | Python dict, session lifetime | PostgreSQL `phi_lookup_table`, AES-encrypted, TTL |
-| Tools (patient/prescription/appointment) | Mock data | Real API calls to EHR/EMR systems |
-| Emergency dispatch | `print()` log | Real 911 API or CAD system integration |
-| HITL notification | `print()` log | Redis queue + reviewer dashboard |
-| Audit logging | None | PostgreSQL `audit_log`, immutable |
-| ML serving | In-process (loaded at startup) | Dedicated model servers (TorchServe or Triton) |
-| Monitoring | None | Prometheus + Grafana |
-| Auth | None | JWT/OAuth at API gateway |
+| **Symptom Check (UC1)** | Report symptoms and receive guidance | Acuity classification (Low / Medium / High), empathetic response, emergency escalation if needed |
+| **Prescription Refill (UC2)** | Request a refill for an existing prescription | Medication extraction, patient confirmation, prescription verification, order submission |
+| **Appointment Booking (UC3)** | Schedule a doctor visit | Preference collection, availability check, slot selection, booking confirmation |
+
+The system handles transitions between workflows in a single session. A patient can report symptoms, then request a refill, then book an appointment — without starting a new conversation or repeating their history.
+
+---
+
+## How patient privacy is protected
+
+**Personally identifiable information never reaches the AI model.**
+
+Before any patient message is processed by the AI, a de-identification pipeline scans it for all recognisable forms of PHI: Social Security Numbers, Medical Record Numbers, insurance member IDs, names, dates of birth, phone numbers, and government-issued identifiers (Aadhaar, PAN). Each detected value is replaced with a cryptographic token before the message is forwarded.
+
+The AI sees only anonymised content such as:
+
+> "My name is `[PERSON_a3f7]`, SSN `[SSN_bc12]`, and I have had a fever for three days."
+
+The original values are stored encrypted and scoped to the session. They are never written to any log.
+
+**Only the patient's first name is restored** in the AI's response, so the patient receives a personally addressed reply while all other PHI remains protected throughout the entire conversation.
+
+This two-layer approach uses:
+- **Pattern matching** for structured identifiers (SSNs, MRNs, insurance IDs, government IDs)
+- **Named Entity Recognition** for unstructured identifiers (names, dates, locations mentioned in free text)
+
+---
+
+## How emergency situations are handled
+
+Emergency detection runs before the AI model and does not depend on it. Two independent detection layers evaluate every message:
+
+**Layer 1 — Keyword detection**
+Hardcoded pattern matching triggers immediately on terms indicating cardiac arrest, stroke, respiratory failure, uncontrolled bleeding, overdose, and explicit suicidal ideation. This requires no AI call and responds in under 50 milliseconds.
+
+**Layer 2 — Soft signal detection**
+A locally hosted AI classifier — running on clinic infrastructure, not a cloud API — identifies indirect crisis language: passive suicidal ideation ("I do not want to be here anymore"), hopelessness, self-harm, and perceived burdensomeness.
+
+**When either layer fires:**
+1. The patient is immediately asked whether emergency services should be dispatched to their location
+2. A clinical reviewer is notified via the Human-in-the-Loop (HITL) dashboard
+3. If the patient confirms, emergency dispatch is initiated
+4. The AI model generates no response during escalation — the patient receives a structured clinical message only
+
+Mental health escalations route to the 988 Suicide and Crisis Lifeline in addition to the HITL reviewer. Physical emergencies route to 911.
+
+The patient's reply to the dispatch question is handled by the same emergency logic on the next turn — the system does not re-classify it as a new symptom check.
+
+---
+
+## How we ensure responses are safe and compliant
+
+Every AI-generated response passes through a deterministic compliance check before it is returned to the patient. This layer does not use the AI model — it is pure rule-based logic.
+
+**What the compliance layer enforces:**
+
+| Rule | How it works |
+|---|---|
+| Mandatory disclaimer | All symptom responses must end with: *"This is not a medical diagnosis. Please consult a licensed healthcare provider for personalised medical advice."* If missing, it is appended automatically. |
+| No diagnosis language | Phrases such as "you have [condition]", "you are diagnosed with", "this is clearly", "you are suffering from" are detected by regular expression and cause the response to be replaced with a safe fallback. |
+| No prescription advice | Phrases such as "take 500mg", "I prescribe", "increase your dose", "stop taking" are detected and trigger the same replacement. |
+| No brand-to-generic substitution | Medications are always extracted as stated by the patient. We do not silently rename a brand name to a generic — that is a clinical and formulary decision requiring authorisation. |
+
+The AI prompts are separately engineered to prevent these violations. The compliance layer is an independent safety net that holds even if a prompt fails on an edge case.
+
+---
+
+## Security controls
+
+| Control | What we do |
+|---|---|
+| Data in transit | TLS 1.3 on all connections; no unencrypted HTTP permitted |
+| PHI to the AI | Never sent — only cryptographic tokens reach the AI model |
+| PHI at rest | AES-256 encryption; scoped to session; automatic expiry |
+| Audit trail | Every conversation turn is logged with de-identified content only; original PHI is never in any log |
+| Access control | Role-based: clinical reviewers access escalation queue only; no patient PII visible in any operational UI |
+| API security | JWT/OAuth authentication at the gateway; WAF blocks SQL injection, XSS, and prompt injection headers |
+| Local AI processing | Health relevance, emergency detection, and intent routing run on clinic infrastructure — no patient data is sent to a cloud API for routing decisions |
+| LLM provider | The AI model (Claude Haiku 4.5 via OpenRouter) sees only de-identified tokens; switching to a different provider requires a single configuration change |
+
+---
+
+## Cost model
+
+| Scenario | AI model calls | Estimated cost |
+|---|---|---|
+| Symptom check (single turn) | 1 | ~$0.0015 |
+| Prescription refill (extract + confirm) | 1 | ~$0.0015 |
+| Appointment booking | 0 — template responses only | $0.0000 |
+| Emergency escalation | 0 — rule-based, no AI | $0.0000 |
+| Multi-turn conversation average | ~1.2–1.5 calls | ~$0.0020 |
+
+Health relevance classification, emergency detection, and intent routing are handled by locally hosted models at zero cloud API cost. The AI model is invoked only for tasks that genuinely require natural language generation: symptom responses, medication extraction, and session summarisation when a patient transitions between workflows.
+
+At 10,000 patient conversations per month, the estimated AI cost is approximately **$20 per month**.
+
+---
+
+## Recommended pilot approach
+
+A phased rollout minimises clinical risk while building operational confidence:
+
+| Phase | Scope | Risk level | Rationale |
+|---|---|---|---|
+| Month 1 | Appointment booking only | Very low | No AI-generated clinical content; fully deterministic templates |
+| Month 2 | Add prescription refill | Low | Extract-and-confirm pattern; no new prescriptions issued; existing records verified |
+| Month 3 | Add symptom triage | Medium | AI-generated responses; HITL reviewer coverage required before go-live |
+
+A Human-in-the-Loop reviewer dashboard should be operational before symptom triage goes live. All emergency escalations should be reviewed by a clinician for the first 30 days.
+
+---
+
+## What this system does not do
+
+- It does not diagnose medical conditions
+- It does not prescribe, adjust, or recommend medications
+- It does not replace a licensed healthcare provider
+- It does not store raw PHI at any point in the conversation pipeline
+- It does not make autonomous emergency dispatch decisions — the patient confirms first, and a clinical reviewer is notified in parallel
+
+---
+
+## Further reading
+
+- [LOW_LEVEL_ARCHITECTURE.md](LOW_LEVEL_ARCHITECTURE.md) — data stores, infrastructure, service design, LangGraph implementation, and the evolution path from demo to production
+- [ARCHITECTURE.md](ARCHITECTURE.md) — technology decisions, design principles, and cost analysis
+- [EXECUTIVE_EMAIL.md](EXECUTIVE_EMAIL.md) — pilot recommendation summary for clinical leadership
